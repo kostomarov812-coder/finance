@@ -130,6 +130,9 @@
     .hub-item:nth-child(7) { animation-delay: .2s; }
     .hub-item:nth-child(8) { animation-delay: .23s; }
     .hub-item:nth-child(9) { animation-delay: .26s; }
+    .hub-item:nth-child(10) { animation-delay: .29s; }
+    .hub-item:nth-child(11) { animation-delay: .32s; }
+    .hub-item:nth-child(12) { animation-delay: .35s; }
     .hub-item:active { transform: scale(.975); background: var(--panel2); }
     .hub-item .t { font-size: 18px; font-weight: 600; letter-spacing: -.2px; }
     .hub-item .s { font-size: 13px; color: var(--muted); margin-top: 3px; }
@@ -561,6 +564,13 @@
     .card-title-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
     .card-title-row .card-title { margin-bottom: 0; }
     .linkbtn { background: none; border: none; color: var(--muted); font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit; padding: 4px 0; }
+    .btn-row { display: flex; gap: 8px; margin-top: 14px; }
+    .btn-row .btn { flex: 1; padding: 11px 6px; }
+    .rule-title { font-size: 18px; font-weight: 700; letter-spacing: -.2px; margin-bottom: 6px; }
+    .rule-text { font-size: 14px; line-height: 1.5; color: var(--muted); }
+    .rule-text b { color: var(--text); }
+    .rule-foot { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 10px; }
+    .rule-src { font-size: 11px; color: var(--muted2); }
     .modal-sub { font-size: 13px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .4px; margin: 18px 0 8px; }
   </style>
 </head>
@@ -656,6 +666,25 @@
       <p class="hint">Галочка справа — «все траты за день внесены». Недотраченное идёт в накопления только за отмеченные дни.</p>
     </div>
 
+    <!-- КОПИЛКА -->
+    <div class="panel" id="panel-stash"><div id="stashBody"></div></div>
+
+    <!-- КАПИТАЛ -->
+    <div class="panel" id="panel-capital"><div id="capitalBody"></div></div>
+
+    <!-- ПОКУПКА -->
+    <div class="panel" id="panel-buy">
+      <div class="card">
+        <div class="card-title">Проверка покупки</div>
+        <p class="hint" style="margin-top:0">Перед крупной тратой введите сумму — покажу, во что она обойдётся на самом деле.</p>
+        <label class="lbl" for="buyName">Что хотите купить</label>
+        <input id="buyName" type="text" placeholder="Например: телефон" autocomplete="off" />
+        <label class="lbl" for="buyAmount">Сколько стоит, ₽</label>
+        <input id="buyAmount" type="number" inputmode="decimal" min="0" placeholder="15000" />
+      </div>
+      <div id="buyResult"></div>
+    </div>
+
     <!-- ВКЛАД -->
     <div class="panel" id="panel-deposit">
       <div class="card">
@@ -724,6 +753,10 @@
           • Какие платежи ещё не оплачены<br>
           • Сколько ушло на еду / транспорт / категорию<br>
           • Сравнение с прошлым месяцем<br>
+          • Сколько в копилке, на сколько хватит подушки<br>
+          • Счётчик свободы: «сколько покрывает пассивный доход»<br>
+          • Проверка покупки: «хочу купить телефон 30000»<br>
+          • Правило недели<br>
           • Прогноз на следующий месяц<br>
           • Где я трачу больше всего<br>
           • Добавить трату: «запиши такси 450»
@@ -864,7 +897,12 @@
         reserve: 0, mode: "all", months: {}, incomes: [], debts: [], spends: {},
         extraMonthly: 0, deposit: Object.assign({}, DP_DEFAULT), ui: Object.assign({}, UI_DEFAULT),
         closed: {}, received: {}, chat: [],
-        bills: [], billPaid: {}, catMap: {}, lastExport: 0
+        bills: [], billPaid: {}, catMap: {}, lastExport: 0,
+        // «Сначала заплати себе»: история процента [{from: "ГГГГ-ММ-ДД", pct}] — действует с даты from
+        payself: { hist: [] },
+        // Копилка: base — стартовая сумма/поправка, ops — пополнения (+) и снятия (−), months — цель подушки
+        stash: { base: 0, ops: [], months: 3, expense: 0 },
+        assets: [], tipShift: 0
       };
     }
     const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -997,6 +1035,21 @@
         });
         Object.keys(raw.catMap || {}).forEach(k => { if (CATEGORIES[raw.catMap[k]]) s.catMap[String(k).toLowerCase()] = raw.catMap[k]; });
         s.lastExport = num(raw.lastExport);
+        const ph = raw.payself && Array.isArray(raw.payself.hist) ? raw.payself.hist : [];
+        s.payself.hist = ph.filter(h => h && DATE_RE.test(h.from || ""))
+          .map(h => ({ from: h.from, pct: Math.min(90, Math.max(0, num(h.pct))) }))
+          .sort((a, b) => a.from.localeCompare(b.from));
+        const rs = raw.stash && typeof raw.stash === "object" ? raw.stash : {};
+        s.stash.base = num(rs.base);
+        s.stash.months = Math.min(12, Math.max(1, Math.round(num(rs.months)) || 3));
+        s.stash.expense = Math.max(0, num(rs.expense));
+        s.stash.ops = (Array.isArray(rs.ops) ? rs.ops : []).filter(o => o && DATE_RE.test(o.date || "") && num(o.amount) !== 0)
+          .map(o => ({ id: String(o.id || uid()), date: o.date, amount: num(o.amount), ts: num(o.ts), note: String(o.note || "") }));
+        s.assets = (Array.isArray(raw.assets) ? raw.assets : []).map(a => ({
+          id: String(a.id || uid()), name: String(a.name || "Без названия"), kind: a.kind === "liab" ? "liab" : "asset",
+          value: Math.max(0, num(a.value)), monthly: Math.max(0, num(a.monthly)), note: String(a.note || "")
+        }));
+        s.tipShift = Math.round(num(raw.tipShift));
         return s;
       }
       // v1 migration
@@ -1032,7 +1085,7 @@
       } catch (e) {}
     }
     function save() {
-      enfMemo = {};
+      enfMemo = {}; stashMemo = null;
       try { localStorage.setItem(KEY, JSON.stringify(state)); }
       catch (e) {
         if (storageOK) { storageOK = false; toast("Браузер не даёт сохранять данные. Сделайте экспорт."); }
@@ -1043,7 +1096,7 @@
     const paidSum = d => sum(d.payments, p => p.amount);
     const remaining = d => d.enforced ? (enf(0).remNow[d.id] || 0) : Math.max(0, d.amount - paidSum(d));
 
-    let enfMemo = {};
+    let enfMemo = {}, stashMemo = null;
     function enf(extra) {
       const k = String(extra || 0);
       if (!enfMemo[k]) enfMemo[k] = computeEnf(extra || 0);
@@ -1159,12 +1212,17 @@
       const itemIn = (day, ts) => day > sd || (day === sd && (!startAfter || num(ts) > startTs));
       const start = startOf(y, m);
       const incs = incomesFor(y, m).map(i => Object.assign({}, i, {
-        inScope: startAfter ? (i.eff > sd || state.received[key + ":" + i.id] === false) : i.eff >= sd
+        inScope: startAfter ? (i.eff > sd || state.received[key + ":" + i.id] === false) : i.eff >= sd,
+        save: i.net * payPct(dateKey(y, m, i.eff)) / 100 // «сначала заплати себе»
       }));
       const scoped = incs.filter(i => i.inScope);
       const incomeTotal = sum(scoped, i => i.net);
       const held = sum(scoped, i => i.held);
       const incomeArrived = sum(scoped.filter(i => i.received), i => i.net);
+      // В копилку: доля с доходов + ручные переводы (плюс — ушло в копилку, минус — взято из неё)
+      const saveTotal = sum(scoped, i => i.save);
+      const saveArrived = sum(scoped.filter(i => i.received), i => i.save);
+      const stashMove = sum(state.stash.ops.filter(o => o.date.slice(0, 7) === key && itemIn(Number(o.date.slice(8, 10)), o.ts)), o => o.amount);
       const payments = paymentsIn(key).filter(x => itemIn(Number(x.p.date.slice(8, 10)), x.p.ts));
       const paid = sum(payments, x => x.p.amount);
       const loans = state.debts.filter(d => d.gotOn && d.gotOn.slice(0, 7) === key && itemIn(Number(d.gotOn.slice(8, 10)), d.gotTs));
@@ -1178,7 +1236,7 @@
       const billsPlanned = billsRem + billsPaid;
       const includeAll = kind !== "current" || state.mode === "all";
       const reserve = kind === "past" ? 0 : state.reserve;
-      const budget = start.value + loanSum + (includeAll ? incomeTotal : incomeArrived) - debtsPlanned - billsPlanned - reserve;
+      const budget = start.value + loanSum + (includeAll ? incomeTotal - saveTotal : incomeArrived - saveArrived) - debtsPlanned - billsPlanned - reserve - stashMove;
       const norm = kind === "past" ? 0 : budget / Dp;
 
       const spentDay = new Array(D + 2).fill(0);
@@ -1190,6 +1248,7 @@
 
       const r = {
         key, y, m, D, kind, t, sd, Dp, tp, start, incs, incomeTotal, incomeArrived, held, loanSum,
+        saveTotal, saveArrived, stashMove,
         payments, paid, debtsRem, debtsPlanned, bills, billsPaid, billsRem, billsPlanned, reserve, budget, norm,
         spentDay, spentMonth, spentThrough, spentToday, includeAll
       };
@@ -1203,23 +1262,184 @@
         }
         r.accBefore = acc; r.pending = pending; r.pendingDays = pendingDays;
         r.cumAvail = acc + norm - spentToday;
-        r.cashNow = start.value + loanSum + incomeArrived - paid - billsPaid - spentThrough;
+        r.cashNow = start.value + loanSum + incomeArrived - saveArrived - stashMove - paid - billsPaid - spentThrough;
         r.spendable = r.cashNow - debtsRem - billsRem - reserve;
         r.available = Math.min(r.cumAvail, r.spendable);
         r.limitedByCash = r.spendable < r.cumAvail - 0.5;
         r.allowToday = r.accBefore + norm;
       }
       if (kind === "past") {
-        r.end = start.value + loanSum + incomeArrived - paid - billsPaid - spentMonth;
+        r.end = start.value + loanSum + incomeArrived - saveArrived - stashMove - paid - billsPaid - spentMonth;
       } else {
         let future = 0;
         for (let d = Math.max(sd, t + 1); d <= D; d++) future += Math.max(Math.max(0, norm), spentDay[d]);
-        r.end = start.value + loanSum + incomeTotal - debtsPlanned - billsPlanned - spentThrough - future;
+        r.end = start.value + loanSum + incomeTotal - saveTotal - stashMove - debtsPlanned - billsPlanned - spentThrough - future;
       }
       return r;
     }
 
     function totalDebtsRemaining() { return sum(state.debts, remaining); }
+
+    // ===== Копилка, подушка, капитал =====
+    // Какой процент дохода уходит в копилку на указанную дату
+    function payPct(dk) {
+      const h = state.payself.hist;
+      let p = 0;
+      for (let i = 0; i < h.length; i++) { if (h[i].from <= dk) p = h[i].pct; else break; }
+      return p;
+    }
+    // Новый процент действует с сегодняшнего дня; прошлые месяцы не пересчитываются
+    function setPayPct(pct) {
+      const tk = todayKey();
+      state.payself.hist = state.payself.hist.filter(x => x.from < tk);
+      const last = state.payself.hist[state.payself.hist.length - 1];
+      if ((last ? last.pct : 0) !== pct) state.payself.hist.push({ from: tk, pct });
+    }
+    // Сколько в копилке: стартовая сумма + доля с пришедших доходов + ручные пополнения и снятия
+    function stashInfo() {
+      if (stashMemo) return stashMemo;
+      const n = now(), h = state.payself.hist, byMonth = [];
+      let auto = 0;
+      if (h.length) {
+        const cur = monthIdx(n.y, n.m), first = Math.max(keyIdx(h[0].from.slice(0, 7)), cur - 240);
+        for (let idx = first; idx <= cur; idx++) {
+          const c = calcMonth(Math.floor(idx / 12), idx % 12);
+          if (c.saveArrived > 0.005) { auto += c.saveArrived; byMonth.push({ key: c.key, amount: c.saveArrived }); }
+        }
+      }
+      const ops = sum(state.stash.ops, o => o.amount);
+      stashMemo = { auto, ops, byMonth, total: Math.max(0, state.stash.base + auto + ops) };
+      return stashMemo;
+    }
+    // Сколько уходит в копилку в месяц с постоянных доходов
+    function monthlySave() {
+      const n = now(), c = calcMonth(n.y, n.m);
+      return sum(c.incs.filter(i => i.monthly), i => i.net) * payPct(todayKey()) / 100;
+    }
+    // Расходы на жизнь в месяц: вручную → среднее за прошлые месяцы → оценка по текущему
+    function monthlyExpenses() {
+      if (state.stash.expense > 0) return { value: state.stash.expense, src: "задано вручную" };
+      const n = now();
+      const billsPaidIn = key => sum(Object.keys(state.billPaid).filter(k => k.startsWith(key + ":")), k => state.billPaid[k].amount);
+      let tot = 0, cnt = 0;
+      for (let k = 1; k <= 3; k++) {
+        const p = addMonths(n.y, n.m, -k), sp = sum(monthSpends(p.y, p.m), x => x.amount);
+        if (sp > 0) { tot += sp + billsPaidIn(monthKey(p.y, p.m)); cnt++; }
+      }
+      if (cnt) return { value: tot / cnt, src: "среднее за " + cnt + " мес." };
+      const c = calcMonth(n.y, n.m), bills = sum(billsFor(n.y, n.m), b => b.paid ? b.paid.amount : b.amount);
+      const sp = sum(monthSpends(n.y, n.m).filter(x => x.key <= todayKey()), x => x.amount);
+      if (sp > 0 && n.d >= 5) return { value: sp / n.d * c.D + bills, src: "оценка по этому месяцу" };
+      if (c.norm > 0) return { value: c.norm * c.D + bills, src: "по плану этого месяца" };
+      return { value: bills, src: bills > 0 ? "только регулярные платежи" : "" };
+    }
+    // Активы и пассивы, счётчик свободы
+    function capitalInfo() {
+      const n = now(), c = calcMonth(n.y, n.m), st = stashInfo(), rate = state.deposit.rate;
+      const assets = state.assets.filter(a => a.kind === "asset"), liabs = state.assets.filter(a => a.kind === "liab");
+      const stashMonthly = st.total * rate / 100 / 12;
+      const passive = stashMonthly + sum(assets, a => a.monthly);
+      const billsMonthly = sum(billsFor(n.y, n.m), b => b.amount);
+      const debtsLeft = totalDebtsRemaining(), debtMonthly = c.held + c.debtsPlanned;
+      const drain = billsMonthly + debtMonthly + sum(liabs, a => a.monthly);
+      const cash = Math.max(0, c.cashNow || 0);
+      const worth = cash + st.total + sum(assets, a => a.value) - debtsLeft - sum(liabs, a => a.value);
+      const exp = monthlyExpenses();
+      const share = exp.value > 0 ? passive / exp.value * 100 : 0;
+      return { c, st, rate, assets, liabs, stashMonthly, passive, billsMonthly, debtsLeft, debtMonthly, drain, cash, worth, exp,
+        freedom: share >= 10 ? Math.round(share) : Math.round(share * 10) / 10,
+        need: rate > 0 && exp.value > passive ? (exp.value - passive) * 12 / (rate / 100) : 0 };
+    }
+    function fmtDays(d) {
+      if (d < 1) return "меньше дня";
+      const v = d < 10 ? Math.round(d * 10) / 10 : Math.round(d);
+      return v.toLocaleString("ru-RU") + " " + (Number.isInteger(v) ? plural(v, "день", "дня", "дней") : "дня");
+    }
+    function monthsText(m) {
+      m = Math.max(1, Math.round(m));
+      if (m < 12) return m + " мес.";
+      const y = Math.floor(m / 12);
+      return y + " " + plural(y, "год", "года", "лет") + (m % 12 ? " " + (m % 12) + " мес." : "");
+    }
+    // Во что на самом деле обойдётся покупка
+    function purchaseCheck(amount) {
+      const cap = capitalInfo(), c = cap.c, st = cap.st, exp = cap.exp, rate = cap.rate;
+      const avail = Math.max(0, c.available || 0), free = Math.max(0, c.spendable || 0), rows = [];
+      let type, text;
+      if (amount <= avail + 0.5) { type = "smart"; text = "Укладывается в сегодняшний лимит (" + fmt(avail) + "). Можно брать спокойно."; }
+      else if (amount <= free + 0.5) { type = "warn"; text = "Деньги есть, но это больше сегодняшнего лимита на " + fmt(amount - avail) + ". В следующие дни придётся ужаться."; }
+      else { type = "bad"; text = "Свободных денег не хватает: нужно ещё " + fmt(amount - free) + ". Лучше накопить или дождаться дохода."; }
+      if (c.norm > 0) rows.push({ l: "В днях жизни", v: fmtDays(amount / c.norm), small: "при норме " + fmt(c.norm) + " в день" });
+      const incM = sum(c.incs.filter(i => i.monthly), i => i.net);
+      if (incM > 0) rows.push({ l: "В рабочих днях", v: fmtDays(amount / (incM / 22)), small: "при доходе " + fmt(incM) + " в месяц" });
+      rows.push({ l: "Свободно сейчас", v: fmt(c.spendable), small: "после покупки останется " + fmt(c.spendable - amount), cls: c.spendable - amount < 0 ? "red" : "" });
+      const mSave = monthlySave();
+      if (mSave > 0) rows.push({ l: "Если копить на неё", v: monthsText(Math.ceil(amount / mSave)), small: "откладывая " + fmt(mSave) + " в месяц" });
+      if (st.total > 0 && exp.value > 0) {
+        const f = x => x.toFixed(1).replace(".", ",");
+        rows.push({ l: "Если взять из копилки", v: f(st.total / exp.value) + " → " + f(Math.max(0, st.total - amount) / exp.value) + " мес.",
+          small: amount > st.total ? "копилки не хватит" : "на столько сократится подушка", cls: "orange" });
+      }
+      if (rate > 0) rows.push({ l: "Если положить в копилку", v: "+" + fmt(amount * rate / 100 / 12) + "/мес", small: "столько эти деньги приносили бы при " + rate + "% годовых", cls: "green" });
+      if (cap.passive >= 1) rows.push({ l: "На доход от активов", v: monthsText(Math.ceil(amount / cap.passive)), small: "за столько пассивный доход сам накопит на покупку" });
+      return { type, text, rows, amount };
+    }
+    // Правила — пересказ идей из двух книг своими словами, с вашими цифрами
+    function weeklyRules() {
+      const cap = capitalInfo(), c = cap.c, st = cap.st, exp = cap.exp, rate = cap.rate;
+      const B = "Самый богатый человек в Вавилоне", R = "Богатый папа, бедный папа";
+      const pct = payPct(todayKey()), mSave = monthlySave(), months = state.stash.months;
+      const incM = sum(c.incs.filter(i => i.monthly), i => i.net), k = state.incomes.length;
+      let over = 0, tracked = 0;
+      for (let d = c.sd; d <= c.t; d++) { if (c.norm > 0 && c.spentDay[d] > c.norm + 0.5) over++; if (c.spentDay[d] > 0) tracked++; }
+      const span = c.t - c.sd + 1, left = totalDebtsRemaining(), ov = overallEnd(enf(0));
+      const cushion = exp.value > 0 ? (st.total / exp.value).toFixed(1).replace(".", ",") : "0";
+      return [
+        { src: B, title: "Сначала заплати себе", tab: "stash", go: "Копилка",
+          text: "Часть каждого дохода — себе, ещё до любых трат. " + (pct > 0
+            ? "У вас это " + pct + "%: в этом месяце в копилку идёт <b>" + fmt(c.saveTotal) + "</b>."
+            : "Хотя бы десятая." + (incM > 0 ? " С вашими доходами это <b>" + fmt(incM * 0.1) + "</b> в месяц." : "") + " Включается в «Копилке».") },
+        { src: B, title: "Держи расходы в узде", tab: "stats", go: "Аналитика",
+          text: "Желаний всегда больше, чем денег, — отделяйте нужное от «хочется». " + (over > 0
+            ? "В этом месяце вы вышли за дневную норму <b>" + over + " " + plural(over, "раз", "раза", "раз") + "</b> за " + span + " " + plural(span, "день", "дня", "дней") + "."
+            : "В этом месяце вы ещё ни разу не вышли за дневную норму.") },
+        { src: B, title: "Пусть деньги работают", tab: "deposit", go: "Вклад",
+          text: "Отложенное должно приносить новое. " + (st.total > 0 && rate > 0
+            ? "Ваша копилка при ставке " + rate + "% даёт около <b>" + fmt(st.total * rate / 100 / 365) + "</b> в день."
+            : "Даже 10 000 ₽ при ставке " + rate + "% — это " + fmt(10000 * rate / 100 / 12) + " в месяц без вашего труда.") },
+        { src: B, title: "Береги накопленное", tab: "stash", go: "Копилка",
+          text: "Не несите деньги туда, где не понимаете, как вернёте своё. Сначала — запас на чёрный день. " + (exp.value > 0
+            ? "Сейчас подушки хватит на <b>" + cushion + " мес.</b> жизни, цель — " + months + "."
+            : "Задайте цель по подушке в «Копилке».") },
+        { src: B, title: "Готовь будущий доход", tab: "capital", go: "Капитал",
+          text: "Позаботьтесь о деньгах, которые будут приходить без вашей работы. Сейчас пассивный доход покрывает <b>" + cap.freedom.toLocaleString("ru-RU") + "%</b> ваших расходов." },
+        { src: B, title: "Расти в цене", tab: "incomes", go: "Доходы",
+          text: "Самый надёжный источник денег — умение зарабатывать больше. " + (k
+            ? "У вас " + k + " " + plural(k, "источник", "источника", "источников") + " дохода" + (incM > 0 ? " на " + fmt(incM) + " в месяц" : "") + ". Что могло бы добавить ещё один?"
+            : "Добавьте свои доходы — посмотрим, от чего вы зависите.") },
+        { src: B, title: "Долги — по плану", tab: "debts", go: "Долги",
+          text: "Долг отдают не рывком, а ровно, из каждого дохода. " + (left > 0
+            ? "Осталось <b>" + fmt(left) + "</b>" + (ov.date && !ov.never ? ", по плану закроете " + fmtDate(ov.date) + "." : ".")
+            : "Долгов у вас нет — эти деньги можно направлять в копилку.") },
+        { src: R, title: "Актив или пассив?", tab: "capital", go: "Капитал",
+          text: "Актив кладёт деньги в карман, пассив — вынимает. Ваши активы приносят <b>+" + fmt(cap.passive) + "</b> в месяц, пассивы забирают <b>−" + fmt(cap.drain) + "</b>." },
+        { src: R, title: "Важно, сколько остаётся", tab: "stats", go: "Аналитика",
+          text: "Дело не в том, сколько заработано, а в том, сколько осталось. В этом месяце пришло <b>" + fmt(c.incomeArrived) + "</b>, ушло <b>" + fmt(c.spentThrough + c.billsPaid + c.paid) + "</b>." },
+        { src: R, title: "Роскошь — в последнюю очередь", tab: "buy", go: "Покупка",
+          text: "Крупные «хочется» покупают на доход от активов, а не из зарплаты. Перед большой тратой проверьте, сколько дней жизни она стоит." },
+        { src: R, title: "Знай свои цифры", tab: "days", go: "Дни",
+          text: "Финансовая грамотность начинается с учёта. В этом месяце траты записаны в <b>" + tracked + "</b> " + plural(tracked, "дне", "днях", "днях") + " из " + span + "." },
+        { src: B, title: "Понемногу, но всегда", tab: "stash", go: "Копилка",
+          text: "Деньги идут к тому, кто откладывает регулярно, а не много и редко. " + (mSave > 0 && exp.value > 0 && st.total < exp.value * months
+            ? "При вашем темпе " + fmt(mSave) + " в месяц подушка соберётся за " + monthsText(Math.ceil((exp.value * months - st.total) / mSave)) + "."
+            : mSave > 0 ? "Вы откладываете " + fmt(mSave) + " в месяц — продолжайте." : "Начните с малого процента в «Копилке».") }
+      ];
+    }
+    function currentRule() {
+      const n = now(), rules = weeklyRules();
+      const week = Math.floor((Date.UTC(n.y, n.m, n.d) / 86400000 + 3) / 7); // неделя с понедельника
+      return rules[(((week + state.tipShift) % rules.length) + rules.length) % rules.length];
+    }
 
     function categoryStats(y, m) {
       const keyPrefix = monthKey(y, m);
@@ -1338,6 +1558,16 @@
       const c = calcMonth(view.y, view.m);
       const n = now();
 
+      // Проверка покупки: «хочу купить телефон 30000», «могу ли потратить 15к»
+      const amtM = q.replace(/(\d)[\s ](?=\d{3}(?!\d))/g, "$1").match(/(\d+(?:[.,]\d+)?)(\s?(?:тыс|к|k)(?![а-яёa-z]))?/);
+      if (amtM && /(можно|можем|могу|стоит|хочу|проверь|проверить|потяну)\s.*(купи|покупк|потрат|взять|брать)|^покупк/.test(q)) {
+        const amount = num(amtM[1].replace(",", ".")) * (amtM[2] ? 1000 : 1);
+        if (amount > 0) {
+          const pc = purchaseCheck(amount);
+          return "Покупка на " + fmt(amount) + ".\n" + pc.text + "\n" + pc.rows.map(r => "• " + r.l + ": " + r.v).join("\n");
+        }
+      }
+
       // Добавить трату. Без команды («запиши…») — только если это не вопрос,
       // иначе «сколько на еду в 2026» записалось бы как трата.
       const CMD = /^(запиши|запишите|добавь|добавить|внеси|потратил|потратила|купил|купила|оплатил|оплатила)\s+/i;
@@ -1353,8 +1583,36 @@
         if (CMD.test(q)) return "Не нашёл сумму. Напишите, например: «запиши такси 450».";
       }
 
+      // Копилка и подушка
+      if (/копилк|накопил|накоплен|подушк|отлож|заплати\s+себе/.test(q)) {
+        const st = stashInfo(), exp = monthlyExpenses(), pct = payPct(todayKey()), ms = monthlySave(), months = state.stash.months;
+        let msg = "В копилке " + fmt(st.total) + ".";
+        msg += pct > 0 ? "\nС каждого дохода откладывается " + pct + "% — это " + fmt(ms) + " в месяц." : "\n«Сначала заплати себе» выключено — включается в разделе «Копилка».";
+        if (exp.value > 0) {
+          msg += "\nПодушки хватит на " + (st.total / exp.value).toFixed(1).replace(".", ",") + " мес. жизни (цель — " + months + ", расходы ≈ " + fmt(exp.value) + " в месяц).";
+          const left = exp.value * months - st.total;
+          if (left > 0 && ms > 0) msg += "\nДо цели осталось " + fmt(left) + " — это " + monthsText(Math.ceil(left / ms)) + " при вашем темпе.";
+        }
+        return msg;
+      }
+
+      // Счётчик свободы, активы и пассивы
+      if (/свобод[аыуе]|пассивн|актив|пассивы|капитал/.test(q)) {
+        const cap = capitalInfo();
+        return "Пассивный доход: " + fmt(cap.passive) + " в месяц — это " + cap.freedom.toLocaleString("ru-RU") + "% ваших расходов" + (cap.exp.value > 0 ? " (" + fmt(cap.exp.value) + " в месяц)" : "") + "." +
+          "\nАктивы приносят +" + fmt(cap.passive) + ", пассивы забирают −" + fmt(cap.drain) + " в месяц." +
+          (cap.need > 0 ? "\nДо полной свободы нужно ещё " + fmt(cap.need) + " в копилке при " + cap.rate + "% годовых." : "") +
+          "\nЧистая стоимость: " + fmt(cap.worth) + ".";
+      }
+
+      // Правило недели
+      if (/правил|совет|мудрост/.test(q)) {
+        const r = currentRule();
+        return r.title + ".\n" + r.text.replace(/<[^>]+>/g, "") + "\n(по мотивам книги «" + r.src + "»)";
+      }
+
       // Сколько потратил
-      if (/потрат|трат(ы|ил)|расход/.test(q) && /сегодня|вчера|недел|месяц|всего|сколько/.test(q) && !/где|на\s+что|больше\s+всего/.test(q)) {
+      if (/потрат|трат(ы|ил)|расход/.test(q) && /сегодня|вчера|недел|месяц|всего|сколько/.test(q) && !/где|на\s+что|больше\s+всего|можно|могу|осталось/.test(q)) {
         const tk = todayKey();
         if (/вчера/.test(q)) return "Вчера потрачено " + fmt(daySpent(shiftDateKey(tk, -1))) + ".";
         if (/недел/.test(q)) return "За последние 7 дней потрачено " + fmt(spentBetween(shiftDateKey(tk, -6), tk)) + ".\nВ среднем " + fmt(spentBetween(shiftDateKey(tk, -6), tk) / 7) + " в день.";
@@ -1434,7 +1692,7 @@
 
       // Помощь
       if (/помощ|что\s+умеешь|команд|пример/.test(q)) {
-        return "Могу ответить на:\n• сколько осталось / можно сегодня\n• сколько потратил сегодня / за неделю / за месяц\n• когда закрою долги\n• какие платежи не оплачены\n• сколько ушло на еду / транспорт\n• сравни с прошлым месяцем\n• прогноз на следующий месяц\n• где я трачу больше всего\n• «запиши такси 450» — добавит трату";
+        return "Могу ответить на:\n• сколько осталось / можно сегодня\n• сколько потратил сегодня / за неделю / за месяц\n• когда закрою долги\n• какие платежи не оплачены\n• сколько ушло на еду / транспорт\n• сравни с прошлым месяцем\n• сколько в копилке / подушка\n• счётчик свободы\n• хочу купить телефон 30000\n• правило недели\n• прогноз на следующий месяц\n• где я трачу больше всего\n• «запиши такси 450» — добавит трату";
       }
 
       return "Не совсем понял. Попробуйте:\n«сколько осталось»\n«сколько потратил за неделю»\n«когда закрою долги»\n«какие платежи»\n«сколько на еду»\n«сравни с прошлым месяцем»\n«запиши обед 350»";
@@ -1480,7 +1738,7 @@
     }
 
     function render() {
-      enfMemo = {};
+      enfMemo = {}; stashMemo = null;
       applyUi();
       const c = calcMonth(view.y, view.m);
       renderSummary(c);
@@ -1489,6 +1747,9 @@
       renderBills(c);
       renderDays(c);
       renderStats(c);
+      renderStash();
+      renderCapital();
+      renderBuy();
       renderSettings(c);
       renderDeposit();
       renderUi();
@@ -1576,6 +1837,7 @@
         "</div>";
 
         html += renderUpcoming(c);
+        html += renderRuleCard();
 
         // Категории месяца
         const stats = categoryStats(c.y, c.m);
@@ -1618,12 +1880,16 @@
         b += row("Пришло доходов", "+" + fmt(c.incomeArrived), "green");
         b += row("Выплачено долгов", "−" + fmt(c.paid));
         if (c.billsPaid > 0) b += row("Регулярные платежи", "−" + fmt(c.billsPaid));
+        if (c.saveArrived > 0) b += row("В копилку с доходов", "−" + fmt(c.saveArrived));
+        if (Math.abs(c.stashMove) > 0.5) b += row(c.stashMove > 0 ? "Переведено в копилку" : "Взято из копилки", (c.stashMove > 0 ? "−" : "+") + fmt(Math.abs(c.stashMove)), c.stashMove > 0 ? "" : "green");
         b += row("Потрачено", "−" + fmt(c.spentMonth));
         b += '<div class="row total"><div class="l">Остаток</div><div class="v ' + (c.end >= 0 ? "green" : "red") + '">' + fmt(c.end) + "</div></div>";
       } else {
         b += row("Доходы", "+" + fmt(c.incomeTotal), "green");
         b += row("Долги", "−" + fmt(c.debtsPlanned), c.debtsPlanned ? "red" : "");
         if (c.billsPlanned > 0) b += row("Регулярные платежи", "−" + fmt(c.billsPlanned), "red");
+        if (c.saveTotal > 0) b += row("В копилку — себе", "−" + fmt(c.includeAll ? c.saveTotal : c.saveArrived), "", "сначала заплати себе");
+        if (Math.abs(c.stashMove) > 0.5) b += row(c.stashMove > 0 ? "Переведено в копилку" : "Взято из копилки", (c.stashMove > 0 ? "−" : "+") + fmt(Math.abs(c.stashMove)), c.stashMove > 0 ? "" : "green");
         b += row("Резерв", "−" + fmt(c.reserve));
         b += '<div class="row total"><div class="l">Бюджет месяца</div><div class="v ' + (c.budget >= 0 ? "green" : "red") + '">' + fmt(c.budget) + "</div></div>";
         b += row("Дней в расчёте", String(c.Dp));
@@ -1710,7 +1976,8 @@
         if (!a) status = '<span class="badge">' + (inc.monthly ? "с " + monthLabel(...keyParts(inc.from)).toLowerCase() : (inc.month ? monthLabel(...keyParts(inc.month)).toLowerCase() : "разовый")) + "</span>";
         else if (c.kind === "future") status = '<span class="badge orange">ожидается ' + a.eff + "-го</span>";
         else status = '<button class="badge ' + (a.received ? "green" : "orange") + '" data-action="toggle-income" data-id="' + inc.id + '">' + (a.received ? "пришло" : "ожидается " + a.eff + "-го") + "</button>";
-        const holdNote = inc.withhold > 0 ? (a ? "на руки " + fmt(a.net) : "удержание " + inc.withhold + "%") : "";
+        const holdNote = (inc.withhold > 0 ? (a ? "на руки " + fmt(a.net) : "удержание " + inc.withhold + "%") : "") +
+          (a && a.save > 0.5 ? (inc.withhold > 0 ? " · " : "") + "в копилку " + fmt(a.save) : "");
         return '<div class="item' + (a ? "" : " dim") + '">' +
           '<div class="item-info"><div class="item-name">' + esc(inc.name) + '</div>' +
           '<div class="item-meta">' + status + '<span>' + inc.day + "-е · " + (inc.monthly ? "каждый месяц" : "разовый") + (holdNote ? " · " + holdNote : "") + '</span></div></div>' +
@@ -1977,6 +2244,161 @@
       openModal(catLabel(cat), body, "cat", { cat }, { hideSave: true });
     }
 
+    // ===== Правило недели =====
+    function renderRuleCard() {
+      const r = currentRule();
+      return '<div class="card"><div class="card-title-row"><div class="card-title">Правило недели</div><button type="button" class="linkbtn" data-action="tip-next">другое ›</button></div>' +
+        '<div class="rule-title">' + r.title + '</div><div class="rule-text">' + r.text + "</div>" +
+        '<div class="rule-foot"><span class="rule-src">по мотивам книги «' + r.src + '»</span>' +
+        '<button type="button" class="linkbtn" style="color:var(--blue-text);white-space:nowrap" data-action="goto-tab" data-tab="' + r.tab + '">' + r.go + " ›</button></div></div>";
+    }
+
+    // ===== Копилка =====
+    function renderStash() {
+      const el = $("stashBody");
+      if (!el) return;
+      const n = now(), c = calcMonth(n.y, n.m), st = stashInfo(), pct = payPct(todayKey()), rate = state.deposit.rate;
+      const exp = monthlyExpenses(), months = state.stash.months, target = exp.value * months, mSave = monthlySave();
+      const incM = sum(c.incs.filter(i => i.monthly), i => i.net);
+      let h = "";
+
+      h += '<div class="card"><div class="card-title">В копилке</div>' +
+        '<div class="big-num">' + fmt(st.total) + "</div>" +
+        '<div class="sub-text">' + (st.total > 0 && rate > 0
+          ? "при ставке " + rate + "% это ≈ " + fmt(st.total * rate / 100 / 365) + " в день · " + fmt(st.total * rate / 100 / 12) + " в месяц"
+          : "деньги, отложенные отдельно от ежедневных трат") + "</div>" +
+        '<div class="btn-row"><button class="btn" data-action="stash-in">Пополнить</button>' +
+        '<button class="btn secondary" data-action="stash-out">Снять</button>' +
+        '<button class="btn secondary" data-action="stash-fix">Исправить</button></div></div>';
+
+      h += '<div class="card"><div class="card-title">Сначала заплати себе</div>' +
+        '<p class="hint" style="margin-top:0">С каждого дохода выбранная доля сразу уходит в копилку, а дневная норма считается уже из остатка.</p>' +
+        '<div class="presets">' + [0, 5, 10, 15, 20].concat([0, 5, 10, 15, 20].includes(pct) ? [] : [pct]).map(v =>
+          '<button type="button" class="preset' + (v === pct ? " on" : "") + '" data-action="pay-pct" data-v="' + v + '">' + (v ? v + "%" : "Выкл") + "</button>").join("") + "</div>";
+      if (pct > 0) {
+        const cut = (c.includeAll ? c.saveTotal : c.saveArrived) / c.Dp;
+        h += '<div style="margin-top:12px">' +
+          row("В копилку в этом месяце", fmt(c.saveTotal), "green", "уже отложено " + fmt(c.saveArrived)) +
+          row("С постоянных доходов", fmt(mSave) + "/мес") +
+          row("Дневная норма", fmt(c.norm), "", cut > 0.5 ? "без откладывания была бы " + fmt(c.norm + cut) : "") + "</div>";
+      } else if (incM > 0) {
+        h += '<p class="hint">10% от ваших доходов — это ' + fmt(incM * 0.1) + " в месяц, или " + fmt(incM * 0.1 / 30) + " в день.</p>";
+      }
+      h += '<p class="hint">Действует для доходов, начиная с сегодняшнего дня. Приложение считает, что эти деньги вы сразу убрали на вклад или отдельный счёт, поэтому в «на руках» их нет.</p></div>';
+
+      h += '<div class="card"><div class="card-title">Подушка безопасности</div>';
+      if (!(exp.value > 0)) {
+        h += '<div class="empty" style="padding:8px 0 14px">Чтобы посчитать подушку, нужно знать расходы в месяц.</div>' +
+          '<button class="btn" style="width:100%" data-action="stash-exp">Указать расходы в месяц</button>';
+      } else {
+        const have = st.total / exp.value, pp = Math.min(100, st.total / target * 100);
+        h += '<div class="big-num ' + (have >= months ? "green" : "") + '" style="font-size:34px">' + have.toFixed(1).replace(".", ",") + ' <span style="font-size:18px;font-weight:600;opacity:.7">мес. жизни</span></div>' +
+          '<div class="sub-text">' + fmt(st.total) + " из " + fmt(target) + " · цель — " + months + " " + plural(months, "месяц", "месяца", "месяцев") + " расходов</div>" +
+          '<div class="prog-bar" style="margin-top:12px;height:6px"><div style="width:' + pp.toFixed(1) + '%"></div></div>' +
+          '<div class="presets">' + [3, 4, 5, 6].map(v => '<button type="button" class="preset' + (v === months ? " on" : "") + '" data-action="cushion-months" data-v="' + v + '">' + v + " мес.</button>").join("") + "</div>" +
+          '<div style="margin-top:12px">' +
+          row('Расходы в месяц <button type="button" class="linkbtn" style="color:var(--blue-text)" data-action="stash-exp">изменить</button>', fmt(exp.value), "", exp.src);
+        if (st.total >= target) h += '</div><div class="alert smart" style="margin:10px 0 0">Подушка собрана. Всё, что сверху, может работать на вас.</div>';
+        else {
+          h += row("Осталось накопить", fmt(target - st.total));
+          if (mSave > 0) {
+            const need = Math.ceil((target - st.total) / mSave), d = addMonths(n.y, n.m, need);
+            h += row("При вашем темпе", "в " + MONTHS_PREP[d.m] + " " + d.y, "green", fmt(mSave) + " в месяц · " + monthsText(need));
+          }
+          h += "</div>";
+          if (!(mSave > 0)) h += '<p class="hint">Включите «Сначала заплати себе» — покажу, когда соберётся подушка.</p>';
+        }
+      }
+      h += "</div>";
+
+      const hist = st.byMonth.map(b => ({ date: b.key + "-99", label: "С доходов", sub: monthLabel(...keyParts(b.key)).toLowerCase(), amount: b.amount }))
+        .concat(state.stash.ops.map(o => ({ date: o.date, ts: o.ts, label: o.note || (o.amount > 0 ? "Пополнение" : "Снятие"), sub: fmtDate(o.date), amount: o.amount, id: o.id })));
+      if (Math.abs(state.stash.base) > 0.005) hist.push({ date: "0000", label: "Начальная сумма", sub: "или поправка вручную", amount: state.stash.base });
+      hist.sort((a, b) => b.date.localeCompare(a.date) || num(b.ts) - num(a.ts));
+      if (hist.length) {
+        h += '<div class="card"><div class="card-title">Движение по копилке</div>' + hist.slice(0, 15).map(x =>
+          '<div class="item"><div class="item-info"><div class="item-name">' + esc(x.label) + '</div><div class="item-meta"><span>' + esc(x.sub) + "</span></div></div>" +
+          '<div class="item-amount ' + (x.amount >= 0 ? "green" : "red") + '">' + (x.amount >= 0 ? "+" : "−") + fmt(Math.abs(x.amount)) + "</div>" +
+          (x.id ? '<div class="item-actions"><button class="btn small danger" data-action="del-stash-op" data-id="' + x.id + '">×</button></div>' : "") + "</div>").join("") + "</div>";
+      }
+      el.innerHTML = h;
+    }
+
+    // ===== Капитал: счётчик свободы, активы и пассивы =====
+    function renderCapital() {
+      const el = $("capitalBody");
+      if (!el) return;
+      const cap = capitalInfo(), exp = cap.exp;
+      const ringPct = Math.min(100, cap.freedom), ringR = 36, ringC = 2 * Math.PI * ringR;
+      let h = "";
+
+      h += '<div class="card"><div class="card-title">Счётчик свободы</div><div class="hero"><div class="hero-left">' +
+        '<div class="hero-num">' + cap.freedom.toLocaleString("ru-RU") + '<span style="font-size:22px;font-weight:700;opacity:.7"> %</span></div>' +
+        '<div class="hero-label">расходов покрывает пассивный доход</div></div>' +
+        '<div class="ring" aria-label="Покрыто ' + cap.freedom + '% расходов"><svg viewBox="0 0 84 84">' +
+        '<circle class="ring-track" cx="42" cy="42" r="' + ringR + '"></circle>' +
+        '<circle class="ring-fill" cx="42" cy="42" r="' + ringR + '" stroke-dasharray="' + ringC.toFixed(1) + '" stroke-dashoffset="' + (ringC * (1 - ringPct / 100)).toFixed(1) + '"></circle>' +
+        '</svg><div class="ring-text">' + Math.round(ringPct) + "%</div></div></div>" +
+        '<div style="margin-top:14px">' +
+        row("Пассивный доход", "+" + fmt(cap.passive) + "/мес", cap.passive > 0 ? "green" : "", "копилка и активы работают сами") +
+        (exp.value > 0
+          ? row('Расходы на жизнь <button type="button" class="linkbtn" style="color:var(--blue-text)" data-action="stash-exp">изменить</button>', fmt(exp.value) + "/мес", "", exp.src) +
+            row("Дней в месяце за счёт активов", fmtDays(Math.min(30, cap.freedom / 100 * 30)).replace("меньше дня", "< 1 дня"), "", "из 30")
+          : "") +
+        (cap.need > 0 ? row("До полной свободы", fmt(cap.need), "", "столько ещё нужно в копилке при " + cap.rate + "% годовых") : "") +
+        "</div>" +
+        (exp.value > 0 ? "" : '<button class="btn" style="width:100%;margin-top:12px" data-action="stash-exp">Указать расходы в месяц</button>') +
+        (exp.value > 0 && cap.freedom >= 100 ? '<div class="alert smart" style="margin:12px 0 0">Пассивный доход покрывает все расходы. Работать можно уже по желанию.</div>' : "") +
+        "</div>";
+
+      h += '<div class="stats" style="margin:0 0 12px">' +
+        '<div class="stat"><div class="stat-label">Активы приносят</div><div class="stat-value green">+' + fmt(cap.passive) + '</div><div class="stat-sub">в месяц</div></div>' +
+        '<div class="stat"><div class="stat-label">Пассивы забирают</div><div class="stat-value red">−' + fmt(cap.drain) + '</div><div class="stat-sub">в месяц</div></div></div>';
+
+      const auto = (name, sub, amt, cls, tab) =>
+        '<div class="item"' + (tab ? ' data-action="goto-tab" data-tab="' + tab + '" style="cursor:pointer"' : "") + '><div class="item-info"><div class="item-name">' + name + "</div>" +
+        '<div class="item-meta"><span class="badge">авто</span><span>' + sub + "</span></div></div>" +
+        '<div class="item-amount ' + cls + '">' + amt + "</div></div>";
+      const manual = (a, sign, cls) =>
+        '<div class="item col"><div class="item-info"><div class="item-name">' + esc(a.name) + "</div>" +
+        '<div class="item-meta"><span>' + (a.value > 0 ? (a.kind === "asset" ? "стоимость " : "остаток ") + fmt(a.value) : "без оценки") + (a.note ? " · " + esc(a.note) : "") + "</span></div></div>" +
+        '<div class="item-amount ' + (a.monthly > 0 ? cls : "") + '">' + (a.monthly > 0 ? sign + fmt(a.monthly) + "/мес" : "0 ₽/мес") + "</div>" +
+        '<div class="item-actions"><button class="btn small secondary" data-action="edit-asset" data-id="' + a.id + '">✎</button>' +
+        '<button class="btn small danger" data-action="del-asset" data-id="' + a.id + '">×</button></div></div>';
+
+      h += '<div class="card"><div class="card-title-row"><div class="card-title">Активы · кладут деньги в карман</div><button type="button" class="linkbtn" style="color:var(--blue-text)" data-action="add-asset" data-kind="asset">+ актив</button></div>' +
+        auto("Копилка", "накоплено " + fmt(cap.st.total), "+" + fmt(cap.stashMonthly) + "/мес", cap.stashMonthly >= 0.5 ? "green" : "", "stash") +
+        (cap.cash > 0 ? auto("Деньги на руках", fmt(cap.cash) + " · лежат без дела", "0 ₽/мес", "", "summary") : "") +
+        cap.assets.map(a => manual(a, "+", "green")).join("") +
+        '<p class="hint">Актив — то, что приносит деньги без вашей ежедневной работы: вклад, сдача жилья, дивиденды, своё дело.</p></div>';
+
+      h += '<div class="card"><div class="card-title-row"><div class="card-title">Пассивы · вынимают деньги</div><button type="button" class="linkbtn" style="color:var(--blue-text)" data-action="add-asset" data-kind="liab">+ пассив</button></div>' +
+        (cap.debtsLeft > 0 || cap.debtMonthly > 0 ? auto("Долги", "осталось " + fmt(cap.debtsLeft), "−" + fmt(cap.debtMonthly) + "/мес", cap.debtMonthly > 0 ? "red" : "", "debts") : "") +
+        (cap.billsMonthly > 0 ? auto("Регулярные платежи", "квартплата, связь, подписки", "−" + fmt(cap.billsMonthly) + "/мес", "red", "bills") : "") +
+        cap.liabs.map(a => manual(a, "−", "red")).join("") +
+        (cap.debtsLeft > 0 || cap.debtMonthly > 0 || cap.billsMonthly > 0 || cap.liabs.length ? "" : '<div class="empty" style="padding:14px">Пассивов нет</div>') +
+        '<p class="hint">Пассив — то, что каждый месяц забирает деньги: кредит, рассрочка, машина, подписки. В бюджет идут только «Платежи» и «Долги»; этот список — для общей картины.</p></div>';
+
+      h += '<div class="card"><div class="card-title">Чистая стоимость</div>' +
+        '<div class="big-num ' + (cap.worth >= 0 ? "green" : "red") + '" style="font-size:34px">' + fmt(cap.worth) + "</div>" +
+        '<div class="sub-text">всё, что у вас есть, минус всё, что вы должны</div></div>';
+      el.innerHTML = h;
+    }
+
+    // ===== Проверка покупки =====
+    function renderBuy() {
+      const el = $("buyResult");
+      if (!el) return;
+      const amount = num($("buyAmount").value);
+      if (!(amount > 0)) { el.innerHTML = ""; return; }
+      const r = purchaseCheck(amount);
+      el.innerHTML = '<div class="alert ' + r.type + '">' + r.text + "</div>" +
+        '<div class="card"><div class="card-title">Цена покупки на самом деле</div>' +
+        r.rows.map(x => row(x.l, x.v, x.cls, x.small)).join("") +
+        '<div class="btn-row"><button class="btn" data-action="buy-spend">Купил — записать тратой</button></div>' +
+        '<p class="hint">Правило из «Богатого папы»: крупные «хочется» — на доход от активов, а не из зарплаты.</p></div>';
+    }
+
     function updateBalHint() {
       const mode = $("balMode").value;
       const T = {
@@ -2028,6 +2450,7 @@
     const TOOLS = [
       { id: "summary", title: "Сводка" }, { id: "incomes", title: "Доходы" }, { id: "bills", title: "Платежи" },
       { id: "debts", title: "Долги" }, { id: "days", title: "Дни" }, { id: "stats", title: "Аналитика" },
+      { id: "stash", title: "Копилка" }, { id: "capital", title: "Капитал" }, { id: "buy", title: "Покупка" },
       { id: "deposit", title: "Вклад" }, { id: "assistant", title: "Ассистент" },
       { id: "settings", title: "Настройки" }
     ];
@@ -2055,10 +2478,10 @@
 
       // Контекстная кнопка «+»
       const fab = $("abAdd"), fabLabel = $("fabLabel");
-      const hideFab = current === "deposit" || current === "settings" || current === "assistant" || current === "hub";
+      const hideFab = current === "deposit" || current === "settings" || current === "assistant" || current === "hub" || current === "buy";
       fab.classList.toggle("hide", hideFab);
       if (!hideFab) {
-        const labels = { summary: "Трата", incomes: "Доход", debts: "Долг", days: "Трата", bills: "Платёж", stats: "Трата" };
+        const labels = { summary: "Трата", incomes: "Доход", debts: "Долг", days: "Трата", bills: "Платёж", stats: "Трата", stash: "В копилку", capital: "Актив" };
         fabLabel.textContent = labels[current] || "Добавить";
       }
       if (current === "hub") renderHub(c);
@@ -2109,6 +2532,11 @@
         : c.billsRem > 0 ? "ещё оплатить " + fmt(c.billsRem) + " · " + c.bills.filter(b => !b.paid).length + " шт." : "всё оплачено";
       const ms = monthSpends(c.y, c.m);
       sub.stats = ms.length ? "потрачено " + fmt(sum(ms, s => s.amount)) + " · графики и категории" : "графики и категории трат";
+      const stI = stashInfo(), pctNow = payPct(todayKey()), capI = capitalInfo();
+      sub.stash = stI.total > 0 ? "накоплено " + fmt(stI.total) + (pctNow ? " · себе " + pctNow + "%" : "")
+        : pctNow ? "себе " + pctNow + "% с каждого дохода" : "сначала заплати себе · подушка";
+      sub.capital = "свобода " + capI.freedom.toLocaleString("ru-RU") + "% · активы и пассивы";
+      sub.buy = "проверить крупную трату";
       sub.deposit = P ? dp.gDaily + " ₽/день = " + fmt(P) : "калькулятор";
       sub.assistant = "спросите что угодно про деньги";
       sub.settings = c.kind === "current" ? "на руках " + fmt(c.cashNow) : "баланс, данные";
@@ -2222,7 +2650,7 @@
       $("dpFinal").textContent = money(sim.final);
       $("dpInterest").textContent = money(sim.interest);
       $("dpAvg").textContent = money(sim.interest / d.days);
-      document.querySelectorAll(".preset").forEach(b => b.classList.toggle("on", Number(b.dataset.v) === d.gDaily));
+      document.querySelectorAll("#panel-deposit .preset").forEach(b => b.classList.toggle("on", Number(b.dataset.v) === d.gDaily));
       if (!(perDay > 0) || !(d.gDaily > 0)) {
         $("gNeed").innerHTML = '<div class="hint">Укажите ставку и желаемый доход в день.</div>';
         $("gPlan").innerHTML = "";
@@ -2260,7 +2688,7 @@
         area.scrollTop = area.scrollHeight;
       }
       $("suggestChips").innerHTML = [
-        "Сколько осталось?", "Сколько потратил за неделю?", "Какие платежи не оплачены?", "Когда закрою долги?", "Сколько на еду?", "Сравни с прошлым месяцем", "Прогноз на следующий месяц", "Где я трачу больше всего?"
+        "Сколько осталось?", "Сколько потратил за неделю?", "Какие платежи не оплачены?", "Когда закрою долги?", "Сколько на еду?", "Сравни с прошлым месяцем", "Сколько в копилке?", "Счётчик свободы", "Правило недели", "Прогноз на следующий месяц", "Где я трачу больше всего?"
       ].map(s => '<button type="button" data-action="ask" data-q="' + esc(s) + '">' + s + '</button>').join("");
     }
 
@@ -2379,6 +2807,47 @@
           CAT_IDS.map(id => '<option value="' + id + '"' + (id === b.cat ? " selected" : "") + ">" + catLabel(id) + "</option>").join("") + "</select></div>" +
         '<div class="form-row"><input id="m-note" placeholder="Заметка (лицевой счёт, как платить…)" value="' + esc(b.note || "") + '" /></div>',
         "bill", { id: edit ? edit.id : null });
+    }
+
+    function showStashOp(kind) {
+      const st = stashInfo(), tk = todayKey();
+      openModal(kind === "in" ? "Пополнить копилку" : "Снять из копилки",
+        '<div class="sub-text" style="margin:-8px 0 12px">Сейчас в копилке: ' + fmt(st.total) + "</div>" +
+        '<div class="form-row"><input id="m-amount" type="number" inputmode="decimal" placeholder="Сумма" /></div>' +
+        '<div class="form-row"><div class="field-label">Дата</div><input id="m-date" type="date" max="' + tk + '" value="' + tk + '" /></div>' +
+        '<div class="form-row"><input id="m-note" placeholder="Заметка (необязательно)" /></div>' +
+        '<p class="hint" style="margin-top:0">' + (kind === "in"
+          ? "Деньги уйдут из «на руках» в копилку — свободный остаток уменьшится."
+          : "Деньги вернутся в «на руках» — свободный остаток вырастет, а подушка уменьшится.") + "</p>",
+        "stashop", { kind }, { saveLabel: kind === "in" ? "Пополнить" : "Снять" });
+    }
+    function showStashFix() {
+      const st = stashInfo();
+      openModal("Сколько в копилке на самом деле",
+        '<div class="form-row"><input id="m-amount" type="number" inputmode="decimal" placeholder="Сумма" value="' + Math.round(st.total) + '" /></div>' +
+        '<p class="hint" style="margin-top:0">Впишите, сколько у вас уже отложено (вклад, накопительный счёт, наличные). На бюджет и «на руках» это не влияет — просто поправка.</p>',
+        "stashfix", {});
+    }
+    function showExpense() {
+      const auto = (() => { const keep = state.stash.expense; state.stash.expense = 0; const v = monthlyExpenses(); state.stash.expense = keep; return v; })();
+      openModal("Расходы на жизнь в месяц",
+        '<div class="form-row"><input id="m-amount" type="number" inputmode="decimal" placeholder="' + (auto.value > 0 ? "Авто: " + fmt(auto.value) : "Например, 35000") + '" value="' + (state.stash.expense || "") + '" /></div>' +
+        '<p class="hint" style="margin-top:0">От этой суммы считаются подушка и счётчик свободы. Оставьте пустым — приложение посчитает само' +
+        (auto.value > 0 ? " (сейчас " + fmt(auto.value) + ", " + auto.src + ")" : " по мере того, как появятся траты") + ".</p>",
+        "expense", {});
+    }
+    function showAsset(edit, kind) {
+      const a = edit || { name: "", kind: kind === "liab" ? "liab" : "asset", value: "", monthly: "", note: "" };
+      const liab = a.kind === "liab";
+      openModal(edit ? "Изменить" : (liab ? "Новый пассив" : "Новый актив"),
+        '<div class="form-row"><div class="field-label">Что это</div><select id="m-kind">' +
+          '<option value="asset"' + (liab ? "" : " selected") + '>Актив — приносит деньги</option>' +
+          '<option value="liab"' + (liab ? " selected" : "") + '>Пассив — забирает деньги</option></select></div>' +
+        '<div class="form-row"><input id="m-name" placeholder="Название: вклад, квартира, кредит…" value="' + esc(a.name) + '" /></div>' +
+        '<div class="form-row"><div class="field-label">Сколько в месяц приносит или забирает, ₽</div><input id="m-monthly" type="number" inputmode="decimal" placeholder="0" value="' + (a.monthly || "") + '" /></div>' +
+        '<div class="form-row"><div class="field-label">Стоимость или остаток долга, ₽ (необязательно)</div><input id="m-value" type="number" inputmode="decimal" placeholder="0" value="' + (a.value || "") + '" /></div>' +
+        '<div class="form-row"><input id="m-note" placeholder="Заметка" value="' + esc(a.note || "") + '" /></div>',
+        "asset", { id: edit ? edit.id : null });
     }
 
     function showBillPay(bill) {
@@ -2516,6 +2985,31 @@
         if (date > todayKey()) return toast("Дата ещё не наступила");
         state.billPaid[ctx.key + ":" + ctx.id] = { date, amount, ts: Date.now() };
         toast("Платёж отмечен");
+      } else if (mode === "stashop") {
+        const amount = num($("m-amount").value), date = $("m-date").value, note = $("m-note").value.trim();
+        if (amount <= 0) return toast("Укажите сумму");
+        if (!DATE_RE.test(date)) return toast("Укажите дату");
+        if (date > todayKey()) return toast("Дата ещё не наступила");
+        if (ctx.kind === "out" && amount > stashInfo().total + 0.005) return toast("В копилке меньше: " + fmt(stashInfo().total));
+        state.stash.ops.push({ id: uid(), date, amount: ctx.kind === "in" ? amount : -amount, ts: Date.now(), note });
+        toast(ctx.kind === "in" ? "В копилку +" + fmt(amount) : "Из копилки −" + fmt(amount));
+      } else if (mode === "stashfix") {
+        const raw = $("m-amount").value.trim(), st = stashInfo();
+        if (raw === "" || num(raw) < 0) return toast("Укажите сумму");
+        state.stash.base = num(raw) - st.auto - st.ops;
+        toast("Копилка: " + fmt(num(raw)));
+      } else if (mode === "expense") {
+        state.stash.expense = Math.max(0, num($("m-amount").value));
+      } else if (mode === "asset") {
+        const name = $("m-name").value.trim(), kind = $("m-kind").value === "liab" ? "liab" : "asset";
+        const value = Math.max(0, num($("m-value").value)), monthly = Math.max(0, num($("m-monthly").value)), note = $("m-note").value.trim();
+        if (!name) return toast("Укажите название");
+        if (ctx.id) {
+          const a = state.assets.find(x => x.id === ctx.id);
+          if (a) Object.assign(a, { name, kind, value, monthly, note });
+        } else {
+          state.assets.push({ id: uid(), name, kind, value, monthly, note });
+        }
       }
       save(); closeModal(); render();
     }
@@ -2587,6 +3081,7 @@
     $("btnAddIncome").addEventListener("click", () => showIncome());
     $("btnAddDebt").addEventListener("click", () => showDebt());
     $("btnAddBill").addEventListener("click", () => showBill());
+    $("panel-buy").addEventListener("input", renderBuy);
     $("mPrev").addEventListener("click", () => shiftMonth(-1));
     $("mNext").addEventListener("click", () => shiftMonth(1));
 
@@ -2720,6 +3215,35 @@
       }
       else if (a === "stats-day") { const d = Number(t.dataset.day); statsSel = statsSel === d ? 0 : d; renderStats(calcMonth(view.y, view.m)); }
       else if (a === "cat-detail") showCategory(t.dataset.cat);
+      else if (a === "pay-pct") {
+        const v = Math.min(90, Math.max(0, Number(t.dataset.v) || 0));
+        setPayPct(v); save(); render();
+        toast(v ? "С каждого дохода — " + v + "% в копилку" : "Откладывание выключено");
+      }
+      else if (a === "cushion-months") { state.stash.months = Math.min(12, Math.max(1, Number(t.dataset.v) || 3)); save(); render(); }
+      else if (a === "stash-in") showStashOp("in");
+      else if (a === "stash-out") showStashOp("out");
+      else if (a === "stash-fix") showStashFix();
+      else if (a === "stash-exp") showExpense();
+      else if (a === "del-stash-op") {
+        const ops = state.stash.ops, idx = ops.findIndex(o => o.id === id);
+        if (idx < 0) return;
+        const removed = ops[idx];
+        ops.splice(idx, 1); save(); render();
+        toast("Запись удалена", "Отменить", () => { state.stash.ops.splice(Math.min(idx, state.stash.ops.length), 0, removed); save(); render(); });
+      }
+      else if (a === "add-asset") showAsset(null, t.dataset.kind);
+      else if (a === "edit-asset") { const x = state.assets.find(v => v.id === id); if (x) showAsset(x); }
+      else if (a === "del-asset") removeWithUndo("assets", id, "Пункт");
+      else if (a === "tip-next") { state.tipShift = (state.tipShift + 1) % 1000; save(); render(); }
+      else if (a === "buy-spend") {
+        const amount = num($("buyAmount").value), name = $("buyName").value.trim() || "Покупка";
+        if (!(amount > 0)) return;
+        const key = todayKey(), sid = addSpend(key, name.charAt(0).toUpperCase() + name.slice(1), amount);
+        $("buyAmount").value = ""; $("buyName").value = "";
+        save(); render();
+        toast(name + " · " + fmt(amount) + " записано", "Отменить", () => undoAdd(key, sid));
+      }
       else if (a === "chat-clear") { state.chat = []; save(); renderAssistant(); }
       else if (a === "edit-debt") { const d = state.debts.find(x => x.id === id); if (d) showDebt(d); }
       else if (a === "pay-debt") { const d = state.debts.find(x => x.id === id); if (d) showPay(d); }
@@ -2766,6 +3290,8 @@
       if (current === "incomes") showIncome();
       else if (current === "debts") showDebt();
       else if (current === "bills") showBill();
+      else if (current === "stash") showStashOp("in");
+      else if (current === "capital") showAsset(null, "asset");
       else showSpend();
     });
     $("abHub").addEventListener("click", () => { current === "hub" ? window.scrollTo(0, 0) : go("hub"); });
