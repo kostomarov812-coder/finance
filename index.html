@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#ff3b30" />
   <title>Умный финансовый планировщик</title>
   <link rel="manifest" href="manifest.webmanifest" />
@@ -23,10 +23,11 @@
       --green: #30d158; --green-soft: rgba(48,209,88,.15);
       --orange: #ff9f0a; --orange-soft: rgba(255,159,10,.15);
       --bar: #0a0a0c; --modal: #121214; --ghost: #3a3a40;
-      --field: #f4f4f5; --field-text: #09090b; --field-focus: #fff; --field-border: transparent; --field-placeholder: #71717a;
+      --field: #1c1c1f; --field-text: var(--text); --field-focus: #232327; --field-border: #2a2a2f; --field-placeholder: #6b6b74;
       --dpbox: #1a1212; --radius: 16px; --radius-sm: 12px; --radius-xs: 8px; --radius-full: 9999px;
       --shadow: 0 4px 24px rgba(0,0,0,.5); --zoom: 1;
       --accent: #ff3b30;
+      color-scheme: dark;
     }
     [data-theme="light"] {
       --bg: #f8fafc; --panel: #fff; --panel2: #f1f5f9; --panel-elevated: #fff;
@@ -40,6 +41,7 @@
       --bar: #fff; --modal: #fff; --ghost: #94a3b8;
       --field: #fff; --field-text: #0f172a; --field-focus: #fff; --field-border: #cbd5e1; --field-placeholder: #94a3b8;
       --dpbox: #eef2ff; --shadow: 0 4px 24px rgba(15,23,42,.08);
+      color-scheme: light;
     }
     [data-theme="light"] .alert.warn { background:#fffbeb; color:#92400e; border-color:#fbbf24; }
     [data-theme="light"] .alert.bad { background:#fef2f2; color:#991b1b; border-color:#f87171; }
@@ -267,11 +269,11 @@
     label.lbl { margin-top: 14px; }
     input, select, textarea {
       background: var(--field); border: 1.5px solid var(--field-border); border-radius: var(--radius-xs);
-      color: var(--field-text); padding: 12px 14px; font-size: 16px; outline: none; width: 100%; font-family: inherit;
+      color: var(--field-text); padding: 12px 14px; font-size: max(16px, calc(16px / var(--zoom, 1))); outline: none; width: 100%; font-family: inherit;
     }
     input:focus, select:focus, textarea:focus { background: var(--field-focus); border-color: var(--blue); box-shadow: 0 0 0 3px var(--blue-soft); }
     input::placeholder { color: var(--field-placeholder); }
-    select { appearance: none; -webkit-appearance: none; background-image: linear-gradient(45deg,transparent 50%,#64748b 50%),linear-gradient(135deg,#64748b 50%,transparent 50%); background-position: calc(100% - 18px) 55%,calc(100% - 13px) 55%; background-size: 5px 5px; background-repeat: no-repeat; padding-right: 36px; }
+    select { appearance: none; -webkit-appearance: none; background-image: linear-gradient(45deg,transparent 50%,#8b8b93 50%),linear-gradient(135deg,#8b8b93 50%,transparent 50%); background-position: calc(100% - 18px) 55%,calc(100% - 13px) 55%; background-size: 5px 5px; background-repeat: no-repeat; padding-right: 36px; }
     input[type="checkbox"] { width: 22px; height: 22px; padding: 0; flex-shrink: 0; accent-color: var(--blue); }
 
     .btn {
