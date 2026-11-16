@@ -477,7 +477,11 @@
     .chat-bubble.bot { background: var(--panel2); align-self: flex-start; border-bottom-left-radius: 4px; }
     .chat-bubble.user { background: var(--blue-soft); color: var(--blue-text); align-self: flex-end; border-bottom-right-radius: 4px; }
     .chat-input-row { display: flex; gap: 8px; margin-top: 12px; }
-    .chat-input-row input { flex: 1; }
+    .chat-input-row input { flex: 1; min-width: 0; }
+    .micbtn { padding: 0; width: 48px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
+    .micbtn svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .micbtn.rec { background: var(--red); border-color: var(--red); color: #fff; animation: micPulse 1.1s ease-in-out infinite; }
+    @keyframes micPulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(255,59,48,.5); } 50% { box-shadow: 0 0 0 9px rgba(255,59,48,0); } }
     .suggest-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
     .suggest-chips button {
       background: transparent; border: 1px solid var(--border); color: var(--muted); font-size: 12px;
@@ -735,11 +739,12 @@
     <!-- АССИСТЕНТ -->
     <div class="panel" id="panel-assistant">
       <div class="card">
-        <div class="card-title-row"><div class="card-title">Умный ассистент</div><button type="button" class="linkbtn" data-action="chat-clear">Очистить</button></div>
+        <div class="card-title-row"><div class="card-title">Умный ассистент</div><div style="display:flex;gap:14px"><button type="button" class="linkbtn" id="voiceToggle" data-action="voice-toggle">Озвучка: выкл</button><button type="button" class="linkbtn" data-action="chat-clear">Очистить</button></div></div>
         <p class="hint" style="margin-top:0">Спрашивайте на обычном языке. Я смотрю ваши реальные данные и считаю на лету.</p>
         <div class="chat-area" id="chatArea"></div>
         <div class="suggest-chips" id="suggestChips"></div>
         <div class="chat-input-row">
+          <button class="btn secondary micbtn" id="chatMic" type="button" aria-label="Сказать голосом"><svg viewBox="0 0 24 24"><path d="M12 3a3 3 0 00-3 3v6a3 3 0 006 0V6a3 3 0 00-3-3z"/><path d="M5 11a7 7 0 0014 0M12 18v3"/></svg></button>
           <input type="text" id="chatInput" placeholder="Сколько осталось на сегодня?" autocomplete="off" />
           <button class="btn" id="chatSend">→</button>
         </div>
@@ -757,6 +762,7 @@
           • Счётчик свободы: «сколько покрывает пассивный доход»<br>
           • Проверка покупки: «хочу купить телефон 30000»<br>
           • Правило недели<br>
+          • Голосом: нажмите на микрофон и скажите «запиши обед 350»<br>
           • Прогноз на следующий месяц<br>
           • Где я трачу больше всего<br>
           • Добавить трату: «запиши такси 450»
@@ -867,7 +873,7 @@
     };
     const CAT_IDS = Object.keys(CATEGORIES);
 
-    const UI_DEFAULT = { theme: "dark", text: "", accent: "#ff3b30", size: 100, start: "hub" };
+    const UI_DEFAULT = { theme: "dark", text: "", accent: "#ff3b30", size: 100, start: "hub", voice: false };
     function normUi(r) {
       r = r && typeof r === "object" ? r : {};
       const hex = v => /^#[0-9a-fA-F]{6}$/.test(v || "") ? String(v).toLowerCase() : null;
@@ -877,7 +883,8 @@
         text: hex(r.text) || "",
         accent: hex(r.accent) || UI_DEFAULT.accent,
         size: Math.min(140, Math.max(80, size)),
-        start: ["summary","assistant","stats"].includes(r.start) ? r.start : "hub"
+        start: ["summary","assistant","stats"].includes(r.start) ? r.start : "hub",
+        voice: !!r.voice
       };
     }
     const DP_DEFAULT = { rate: 13, balance: 2800000, days: 365, add: 0, mode: "end", gDaily: 100, gSaved: 0, gMonthly: 3000, gMonths: 0 };
@@ -930,15 +937,15 @@
     }
     function fmt(n) {
       n = Math.round(Number(n) || 0) || 0;
-      return n.toLocaleString("ru-RU") + " ₽";
+      return n.toLocaleString("ru-RU").replace("-", "−") + " ₽";
     }
     function fmtP(n) {
       n = Number(n) || 0;
-      return n.toLocaleString("ru-RU", { maximumFractionDigits: 2 }) + " ₽";
+      return n.toLocaleString("ru-RU", { maximumFractionDigits: 2 }).replace("-", "−") + " ₽";
     }
     function fmtSigned(n) {
       n = Math.round(Number(n) || 0) || 0;
-      return (n > 0 ? "+" : "") + n.toLocaleString("ru-RU") + " ₽";
+      return (n > 0 ? "+" : "") + n.toLocaleString("ru-RU").replace("-", "−") + " ₽";
     }
     function plural(n, one, few, many) {
       n = Math.abs(n);
@@ -1328,9 +1335,10 @@
       }
       if (cnt) return { value: tot / cnt, src: "среднее за " + cnt + " мес." };
       const c = calcMonth(n.y, n.m), bills = sum(billsFor(n.y, n.m), b => b.paid ? b.paid.amount : b.amount);
-      const sp = sum(monthSpends(n.y, n.m).filter(x => x.key <= todayKey()), x => x.amount);
-      if (sp > 0 && n.d >= 5) return { value: sp / n.d * c.D + bills, src: "оценка по этому месяцу" };
-      if (c.norm > 0) return { value: c.norm * c.D + bills, src: "по плану этого месяца" };
+      // Трат за 5+ дней учёта хватает для оценки; иначе считаем, что на жизнь уходит всё, что приходит на руки
+      if (c.spentThrough > 0 && c.tp >= 5) return { value: c.spentThrough / c.tp * c.D + bills, src: "оценка по этому месяцу" };
+      const onHand = sum(c.incs.filter(i => i.monthly), i => i.net - i.save);
+      if (onHand > 0) return { value: onHand, src: "по доходам на руки — уточнится, когда появятся траты" };
       return { value: bills, src: bills > 0 ? "только регулярные платежи" : "" };
     }
     // Активы и пассивы, счётчик свободы
@@ -1340,15 +1348,60 @@
       const stashMonthly = st.total * rate / 100 / 12;
       const passive = stashMonthly + sum(assets, a => a.monthly);
       const billsMonthly = sum(billsFor(n.y, n.m), b => b.amount);
-      const debtsLeft = totalDebtsRemaining(), debtMonthly = c.held + c.debtsPlanned;
+      const debtsLeft = totalDebtsRemaining();
+      // Исполнительные листы: что приставы удерживают с доходов этого месяца (со всех, а не только «после ввода баланса»)
+      const allIncs = incomesFor(n.y, n.m), ipDebts = state.debts.filter(d => d.enforced);
+      const ipMonthly = sum(allIncs, i => i.held), grossM = sum(allIncs, i => i.amount);
+      const ipNominal = sum(allIncs.filter(i => i.monthly && i.withhold > 0), i => i.amount * i.withhold / 100);
+      const ipLeft = sum(ipDebts, remaining), ipTotal = sum(ipDebts, d => d.amount);
+      const plainLeft = Math.max(0, debtsLeft - ipLeft), plainMonthly = c.debtsPlanned;
+      const debtMonthly = ipMonthly + plainMonthly;
       const drain = billsMonthly + debtMonthly + sum(liabs, a => a.monthly);
       const cash = Math.max(0, c.cashNow || 0);
       const worth = cash + st.total + sum(assets, a => a.value) - debtsLeft - sum(liabs, a => a.value);
       const exp = monthlyExpenses();
       const share = exp.value > 0 ? passive / exp.value * 100 : 0;
       return { c, st, rate, assets, liabs, stashMonthly, passive, billsMonthly, debtsLeft, debtMonthly, drain, cash, worth, exp,
+        ipMonthly, ipNominal, ipLeft, ipTotal, plainLeft, plainMonthly,
+        ipShare: grossM > 0 ? Math.round(ipMonthly / grossM * 100) : 0,
+        incNet: sum(allIncs.filter(i => i.monthly), i => i.net),
         freedom: share >= 10 ? Math.round(share) : Math.round(share * 10) / 10,
         need: rate > 0 && exp.value > passive ? (exp.value - passive) * 12 / (rate / 100) : 0 };
+    }
+    // Когда закроются исполнительные листы при расчёте e (enf(0), enf(доплата) или с разовым платежом)
+    function ipEnd(e) {
+      let latest = "", never = false, any = false;
+      state.debts.forEach(d => {
+        if (!d.enforced || remaining(d) <= 0) return;
+        any = true;
+        const pd = e.payoff[d.id];
+        if (!pd) never = true; else if (pd > latest) latest = pd;
+      });
+      return { date: latest, never, any };
+    }
+    // Что будет, если прямо сейчас отдать приставам разовую сумму (проба: платёж временно добавляется и убирается)
+    function ipEndWithLump(lump) {
+      const e0 = enf(0), added = [];
+      const E = state.debts.filter(d => d.enforced).sort((a, b) => (a.date || "9999-99-99").localeCompare(b.date || "9999-99-99"));
+      let left = lump;
+      E.forEach(d => {
+        const rem = e0.remNow[d.id] || 0;
+        if (rem <= 0 || left <= 0) return;
+        const pay = { id: "__sim", date: todayKey(), amount: Math.min(rem, left), ts: 0 };
+        d.payments.push(pay); added.push([d, pay]); left -= pay.amount;
+      });
+      let res;
+      try { res = computeEnf(0); } finally { added.forEach(([d, pay]) => { d.payments.splice(d.payments.indexOf(pay), 1); }); }
+      let latest = "", never = false;
+      E.forEach(d => {
+        if ((e0.remNow[d.id] || 0) <= 0) return;
+        const pd = res.payoff[d.id];
+        if (!pd) never = true; else if (pd > latest) latest = pd;
+      });
+      return { date: latest, never };
+    }
+    function earlierText(days) {
+      return days < 45 ? days + " " + plural(days, "день", "дня", "дней") : monthsText(Math.round(days / 30.4));
     }
     function fmtDays(d) {
       if (d < 1) return "меньше дня";
@@ -1381,6 +1434,16 @@
           small: amount > st.total ? "копилки не хватит" : "на столько сократится подушка", cls: "orange" });
       }
       if (rate > 0) rows.push({ l: "Если положить в копилку", v: "+" + fmt(amount * rate / 100 / 12) + "/мес", small: "столько эти деньги приносили бы при " + rate + "% годовых", cls: "green" });
+      if (cap.ipLeft > 0) {
+        const base = ipEnd(enf(0));
+        if (base.date && !base.never) {
+          if (amount >= cap.ipLeft - 0.005) rows.push({ l: "Если отдать приставам", v: "закроете всё", small: "исполнительные листы будут погашены полностью", cls: "green" });
+          else {
+            const w = ipEndWithLump(amount), gain = w.date && !w.never ? daysBetween(base.date) - daysBetween(w.date) : 0;
+            if (gain > 0) rows.push({ l: "Если отдать приставам", v: "на " + earlierText(gain) + " раньше", small: "листы закроются " + fmtDate(w.date) + " вместо " + fmtDate(base.date), cls: "green" });
+          }
+        }
+      }
       if (cap.passive >= 1) rows.push({ l: "На доход от активов", v: monthsText(Math.ceil(amount / cap.passive)), small: "за столько пассивный доход сам накопит на покупку" });
       return { type, text, rows, amount };
     }
@@ -1632,6 +1695,8 @@
         if (left <= 0) return "Долгов больше нет — всё погашено.";
         const ov = overallEnd(enf(0));
         let msg = "Осталось отдать: " + fmt(left) + ".\n";
+        const capD = capitalInfo();
+        if (capD.ipLeft > 0) msg += "Из них по исполнительным листам: " + fmt(capD.ipLeft) + (capD.ipMonthly > 0 ? " — приставы удерживают " + fmt(capD.ipMonthly) + " в месяц (" + capD.ipShare + "% дохода)" : "") + ".\n";
         if (ov.never || !ov.date) msg += "Дату полного погашения пока не могу посчитать (нет удержаний по ИП или сроков).";
         else msg += "Все долги закроются примерно " + fmtDate(ov.date) + " (" + spanText(ov.date) + ").";
         return msg;
@@ -1885,7 +1950,7 @@
         b += row("Потрачено", "−" + fmt(c.spentMonth));
         b += '<div class="row total"><div class="l">Остаток</div><div class="v ' + (c.end >= 0 ? "green" : "red") + '">' + fmt(c.end) + "</div></div>";
       } else {
-        b += row("Доходы", "+" + fmt(c.incomeTotal), "green");
+        b += row("Доходы", "+" + fmt(c.incomeTotal), "green", c.held > 0 ? "уже за вычетом " + fmt(c.held) + " по исполнительным листам" : "");
         b += row("Долги", "−" + fmt(c.debtsPlanned), c.debtsPlanned ? "red" : "");
         if (c.billsPlanned > 0) b += row("Регулярные платежи", "−" + fmt(c.billsPlanned), "red");
         if (c.saveTotal > 0) b += row("В копилку — себе", "−" + fmt(c.includeAll ? c.saveTotal : c.saveArrived), "", "сначала заплати себе");
@@ -2340,7 +2405,7 @@
         '<circle class="ring-fill" cx="42" cy="42" r="' + ringR + '" stroke-dasharray="' + ringC.toFixed(1) + '" stroke-dashoffset="' + (ringC * (1 - ringPct / 100)).toFixed(1) + '"></circle>' +
         '</svg><div class="ring-text">' + Math.round(ringPct) + "%</div></div></div>" +
         '<div style="margin-top:14px">' +
-        row("Пассивный доход", "+" + fmt(cap.passive) + "/мес", cap.passive > 0 ? "green" : "", "копилка и активы работают сами") +
+        row("Пассивный доход", (cap.passive >= 0.5 ? "+" : "") + fmt(cap.passive) + "/мес", cap.passive > 0 ? "green" : "", "копилка и активы работают сами") +
         (exp.value > 0
           ? row('Расходы на жизнь <button type="button" class="linkbtn" style="color:var(--blue-text)" data-action="stash-exp">изменить</button>', fmt(exp.value) + "/мес", "", exp.src) +
             row("Дней в месяце за счёт активов", fmtDays(Math.min(30, cap.freedom / 100 * 30)).replace("меньше дня", "< 1 дня"), "", "из 30")
@@ -2352,8 +2417,33 @@
         "</div>";
 
       h += '<div class="stats" style="margin:0 0 12px">' +
-        '<div class="stat"><div class="stat-label">Активы приносят</div><div class="stat-value green">+' + fmt(cap.passive) + '</div><div class="stat-sub">в месяц</div></div>' +
-        '<div class="stat"><div class="stat-label">Пассивы забирают</div><div class="stat-value red">−' + fmt(cap.drain) + '</div><div class="stat-sub">в месяц</div></div></div>';
+        '<div class="stat"><div class="stat-label">Активы приносят</div><div class="stat-value green">' + (cap.passive >= 0.5 ? "+" : "") + fmt(cap.passive) + '</div><div class="stat-sub">в месяц</div></div>' +
+        '<div class="stat"><div class="stat-label">Пассивы забирают</div><div class="stat-value red">' + (cap.drain >= 0.5 ? "−" : "") + fmt(cap.drain) + '</div><div class="stat-sub">в месяц</div></div></div>';
+
+      if (cap.ipLeft > 0) {
+        const base = ipEnd(enf(0)), paidPct = cap.ipTotal > 0 ? Math.min(100, (cap.ipTotal - cap.ipLeft) / cap.ipTotal * 100) : 0;
+        h += '<div class="card"><div class="card-title">Исполнительные листы</div>' +
+          '<div class="big-num red" style="font-size:34px">−' + fmt(cap.ipMonthly) + ' <span style="font-size:18px;font-weight:600;opacity:.7">в месяц</span></div>' +
+          '<div class="sub-text">' + (cap.ipMonthly > 0 ? "приставы удерживают " + cap.ipShare + "% ваших доходов" : "удержание с доходов пока не задано") + "</div>" +
+          '<div class="prog-bar" style="margin-top:12px;height:6px"><div style="width:' + paidPct.toFixed(1) + '%;background:var(--green)"></div></div>' +
+          '<div class="sub-text" style="margin-top:8px">отдано ' + fmtP(Math.max(0, cap.ipTotal - cap.ipLeft)) + " из " + fmtP(cap.ipTotal) + "</div>" +
+          '<div style="margin-top:12px">' + row("Осталось отдать", fmtP(cap.ipLeft), "red");
+        if (base.date && !base.never) {
+          const dd = daysBetween(base.date);
+          h += row("Закроются", fmtDate(base.date), "green", "через " + earlierText(Math.max(1, dd)));
+          if (cap.ipNominal > 0) h += row("После закрытия", "+" + fmt(cap.ipNominal) + "/мес", "green", "столько прибавится на руки");
+          const extra = Math.max(1000, Math.round(cap.incNet * 0.1 / 500) * 500), ex = ipEnd(enf(extra));
+          if (ex.date && !ex.never) {
+            const gain = dd - daysBetween(ex.date);
+            if (gain > 0) h += row("Если доплачивать по " + fmt(extra) + " в месяц", "на " + earlierText(gain) + " раньше", "", "закроются " + fmtDate(ex.date));
+          }
+          h += "</div>";
+        } else {
+          h += '</div><div class="alert warn" style="margin:12px 0 0">Чтобы посчитать срок, укажите удержание: «Доходы» → ✎ у зарплаты → «Удержание по ИП, %» (например, 50).<br>' +
+            '<button class="btn small" data-action="goto-tab" data-tab="incomes">Открыть доходы</button></div>';
+        }
+        h += "</div>";
+      }
 
       const auto = (name, sub, amt, cls, tab) =>
         '<div class="item"' + (tab ? ' data-action="goto-tab" data-tab="' + tab + '" style="cursor:pointer"' : "") + '><div class="item-info"><div class="item-name">' + name + "</div>" +
@@ -2367,13 +2457,14 @@
         '<button class="btn small danger" data-action="del-asset" data-id="' + a.id + '">×</button></div></div>';
 
       h += '<div class="card"><div class="card-title-row"><div class="card-title">Активы · кладут деньги в карман</div><button type="button" class="linkbtn" style="color:var(--blue-text)" data-action="add-asset" data-kind="asset">+ актив</button></div>' +
-        auto("Копилка", "накоплено " + fmt(cap.st.total), "+" + fmt(cap.stashMonthly) + "/мес", cap.stashMonthly >= 0.5 ? "green" : "", "stash") +
+        auto("Копилка", "накоплено " + fmt(cap.st.total), (cap.stashMonthly >= 0.5 ? "+" : "") + fmt(cap.stashMonthly) + "/мес", cap.stashMonthly >= 0.5 ? "green" : "", "stash") +
         (cap.cash > 0 ? auto("Деньги на руках", fmt(cap.cash) + " · лежат без дела", "0 ₽/мес", "", "summary") : "") +
         cap.assets.map(a => manual(a, "+", "green")).join("") +
         '<p class="hint">Актив — то, что приносит деньги без вашей ежедневной работы: вклад, сдача жилья, дивиденды, своё дело.</p></div>';
 
       h += '<div class="card"><div class="card-title-row"><div class="card-title">Пассивы · вынимают деньги</div><button type="button" class="linkbtn" style="color:var(--blue-text)" data-action="add-asset" data-kind="liab">+ пассив</button></div>' +
-        (cap.debtsLeft > 0 || cap.debtMonthly > 0 ? auto("Долги", "осталось " + fmt(cap.debtsLeft), "−" + fmt(cap.debtMonthly) + "/мес", cap.debtMonthly > 0 ? "red" : "", "debts") : "") +
+        (cap.ipLeft > 0 || cap.ipMonthly > 0 ? auto("Исполнительные листы", "осталось " + fmt(cap.ipLeft) + (cap.ipShare ? " · " + cap.ipShare + "% дохода" : ""), "−" + fmt(cap.ipMonthly) + "/мес", cap.ipMonthly > 0 ? "red" : "", "debts") : "") +
+        (cap.plainLeft > 0 || cap.plainMonthly > 0 ? auto("Долги", "осталось " + fmt(cap.plainLeft) + " · платёж этого месяца", "−" + fmt(cap.plainMonthly) + "/мес", cap.plainMonthly > 0 ? "red" : "", "debts") : "") +
         (cap.billsMonthly > 0 ? auto("Регулярные платежи", "квартплата, связь, подписки", "−" + fmt(cap.billsMonthly) + "/мес", "red", "bills") : "") +
         cap.liabs.map(a => manual(a, "−", "red")).join("") +
         (cap.debtsLeft > 0 || cap.debtMonthly > 0 || cap.billsMonthly > 0 || cap.liabs.length ? "" : '<div class="empty" style="padding:14px">Пассивов нет</div>') +
@@ -2681,6 +2772,8 @@
     function renderAssistant() {
       const area = $("chatArea");
       if (!area) return;
+      $("voiceToggle").textContent = "Озвучка: " + (state.ui.voice ? "вкл" : "выкл");
+      $("voiceToggle").style.color = state.ui.voice ? "var(--blue-text)" : "";
       if (!state.chat.length) {
         area.innerHTML = '<div class="chat-bubble bot">Привет! Я смотрю ваши реальные цифры и могу ответить на вопросы. Например: «сколько осталось», «когда закрою долги», «сколько на еду» или «запиши такси 450».</div>';
       } else {
@@ -2692,11 +2785,75 @@
       ].map(s => '<button type="button" data-action="ask" data-q="' + esc(s) + '">' + s + '</button>').join("");
     }
 
+    // ===== Голос =====
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    let rec = null, recOn = false;
+    // Текст для озвучки: «1 500 ₽» → «1500 рублей», без значков
+    function speechText(t) {
+      return String(t)
+        .replace(/([\d][\d\s ]*(?:[.,]\d+)?)\s?₽/g, (m, d) => {
+          const v = Number(d.replace(/[\s ]/g, "").replace(",", "."));
+          return d.replace(/[\s ]/g, "") + " " + plural(Math.floor(v), "рубль", "рубля", "рублей");
+        })
+        .replace(/−/g, " минус ").replace(/\+(?=\d)/g, " плюс ").replace(/≈/g, " примерно ")
+        .replace(/\/мес/g, " в месяц").replace(/\/день/g, " в день").replace(/→/g, " — ")
+        .replace(/[•«»()]/g, " ").replace(/\n+/g, ". ").replace(/\s+/g, " ").trim();
+    }
+    function speak(t) {
+      if (!state.ui.voice || !window.speechSynthesis) return;
+      try {
+        speechSynthesis.cancel();
+        const u = new SpeechSynthesisUtterance(speechText(t));
+        u.lang = "ru-RU";
+        const v = speechSynthesis.getVoices().find(x => /^ru/i.test(x.lang));
+        if (v) u.voice = v;
+        speechSynthesis.speak(u);
+      } catch (e) {}
+    }
+    // iPhone разрешает озвучку только после нажатия — «будим» её пустой фразой
+    function unlockSpeech() {
+      if (!state.ui.voice || !window.speechSynthesis) return;
+      try { const u = new SpeechSynthesisUtterance(" "); u.volume = 0; speechSynthesis.speak(u); } catch (e) {}
+    }
+    function micFallback() {
+      $("chatInput").focus();
+      toast("Нажмите микрофон на клавиатуре и говорите — потом «→»");
+    }
+    function toggleMic() {
+      if (recOn && rec) { try { rec.stop(); } catch (e) {} return; }
+      if (!SR) return micFallback();
+      unlockSpeech();
+      try {
+        rec = new SR();
+        rec.lang = "ru-RU"; rec.interimResults = true; rec.continuous = false; rec.maxAlternatives = 1;
+        let finalText = "";
+        rec.onstart = () => { recOn = true; $("chatMic").classList.add("rec"); $("chatInput").value = ""; $("chatInput").placeholder = "Говорите…"; };
+        rec.onresult = e => {
+          let txt = "";
+          for (let i = 0; i < e.results.length; i++) txt += e.results[i][0].transcript;
+          $("chatInput").value = txt;
+          if (e.results[e.results.length - 1].isFinal) finalText = txt;
+        };
+        rec.onerror = e => {
+          if (e.error === "no-speech" || e.error === "aborted") return;
+          if (e.error === "not-allowed") toast("Нет доступа к микрофону. Разрешите его в настройках браузера.");
+          else micFallback();
+        };
+        rec.onend = () => {
+          recOn = false; $("chatMic").classList.remove("rec"); $("chatInput").placeholder = "Сколько осталось на сегодня?";
+          const q = (finalText || $("chatInput").value).trim();
+          if (q) { $("chatInput").value = ""; askAssistant(q); }
+        };
+        rec.start();
+      } catch (e) { recOn = false; micFallback(); }
+    }
+
     function askAssistant(q) {
       q = String(q || "").trim();
       if (!q) return;
       state.chat.push({ role: "user", text: q });
       const answer = assistantAnswer(q);
+      speak(answer);
       state.chat.push({ role: "bot", text: answer });
       if (state.chat.length > 40) state.chat = state.chat.slice(-40);
       save();
@@ -3114,6 +3271,7 @@
     $("qAdd").addEventListener("click", quickAdd);
     $("qSmart").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); quickAdd(); } });
 
+    $("chatMic").addEventListener("click", toggleMic);
     $("chatSend").addEventListener("click", () => { askAssistant($("chatInput").value); $("chatInput").value = ""; });
     $("chatInput").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); askAssistant($("chatInput").value); $("chatInput").value = ""; } });
 
@@ -3243,6 +3401,11 @@
         $("buyAmount").value = ""; $("buyName").value = "";
         save(); render();
         toast(name + " · " + fmt(amount) + " записано", "Отменить", () => undoAdd(key, sid));
+      }
+      else if (a === "voice-toggle") {
+        state.ui.voice = !state.ui.voice; save(); renderAssistant();
+        if (state.ui.voice) { if (window.speechSynthesis) speak("Озвучка включена"); else { state.ui.voice = false; save(); renderAssistant(); toast("Этот браузер не умеет говорить вслух"); } }
+        else if (window.speechSynthesis) speechSynthesis.cancel();
       }
       else if (a === "chat-clear") { state.chat = []; save(); renderAssistant(); }
       else if (a === "edit-debt") { const d = state.debts.find(x => x.id === id); if (d) showDebt(d); }
