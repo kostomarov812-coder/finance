@@ -806,6 +806,7 @@
 
     .presets.fit { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 6px; }
     .presets.fit .preset { padding: 8px 0; text-align: center; }
+    .presets.fit .preset { min-width: 0; font-size: 13px; letter-spacing: -.2px; }
     /* главный: умная подсказка */
     .insight {
       display: flex; align-items: center; gap: 14px; width: 100%; text-align: left; font-family: inherit; color: var(--text);
@@ -2724,7 +2725,7 @@
 
       h += '<div class="card"><div class="card-title">Сначала заплати себе</div>' +
         '<p class="hint" style="margin-top:0">С каждого дохода выбранная доля сразу уходит в копилку, а дневная норма считается уже из остатка.</p>' +
-        '<div class="presets fit">' + [0, 5, 10, 15, 20].concat([0, 5, 10, 15, 20].includes(pct) ? [] : [pct]).map(v =>
+        '<div class="presets fit">' + [0, 5, 10, 15, 20, 25, 30].concat([0, 5, 10, 15, 20, 25, 30].includes(pct) ? [] : [pct]).map(v =>
           '<button type="button" class="preset' + (v === pct ? " on" : "") + '" data-action="pay-pct" data-v="' + v + '">' + (v ? v + "%" : "Выкл") + "</button>").join("") + "</div>";
       if (pct > 0) {
         const cut = (c.includeAll ? c.saveTotal : c.saveArrived) / c.Dp;
