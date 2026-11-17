@@ -938,7 +938,7 @@
         <div id="daysAction"></div>
       </div>
       <div class="card" id="daysList"></div>
-      <p class="hint">Галочка справа — «все траты за день внесены». Недотраченное идёт в накопления только за отмеченные дни.</p>
+      <p class="hint">Недотраченное за прошедшие дни само переходит в накопления. Забыли внести трату — нажмите на день и добавьте, всё пересчитается.</p>
     </div>
 
     <!-- КОПИЛКА -->
@@ -1366,7 +1366,7 @@
       } catch (e) {}
     }
     function save() {
-      enfMemo = {}; stashMemo = null;
+      enfMemo = {}; stashMemo = null; startMemo = {}; firstIdxMemo = null;
       try { localStorage.setItem(KEY, JSON.stringify(state)); }
       catch (e) {
         if (storageOK) { storageOK = false; toast("Браузер не даёт сохранять данные. Сделайте экспорт."); }
@@ -1492,14 +1492,39 @@
     }
     function daySpent(key) { return sum(state.spends[key] || [], x => x.amount); }
 
+    // Первый месяц, в котором есть хоть какие-то ваши данные (раньше него остаток не переносим)
+    let startMemo = {}, firstIdxMemo = null;
+    function dataStartIdx() {
+      if (firstIdxMemo !== null) return firstIdxMemo;
+      const ks = [];
+      const addD = d => { if (DATE_RE.test(d || "") && d !== "2000-01-01") ks.push(d.slice(0, 7)); };
+      const addM = k => { if (/^\d{4}-\d{2}$/.test(k || "") && k !== "2000-01") ks.push(k); };
+      Object.keys(state.months).forEach(k => { if (typeof state.months[k].start === "number") addM(k); });
+      Object.keys(state.spends).forEach(addD);
+      state.incomes.forEach(i => { addM(i.from); addM(i.month); });
+      state.bills.forEach(b => addM(b.from));
+      Object.keys(state.billPaid).forEach(k => addM(k.slice(0, 7)));
+      state.debts.forEach(d => { addD(d.gotOn); d.payments.forEach(x => addD(x.date)); });
+      state.stash.ops.forEach(o => addD(o.date));
+      firstIdxMemo = ks.length ? Math.min(...ks.map(keyIdx)) : Infinity;
+      return firstIdxMemo;
+    }
     function startOf(y, m) {
-      const ms = state.months[monthKey(y, m)] || {};
-      if (typeof ms.start === "number") return { value: ms.start, explicit: true };
-      if (monthKind(y, m) === "future") {
+      const key = monthKey(y, m);
+      if (startMemo[key]) return startMemo[key];
+      const ms = state.months[key] || {};
+      let r;
+      if (typeof ms.start === "number") r = { value: ms.start, explicit: true };
+      else if (monthKind(y, m) === "future") {
         const p = addMonths(y, m, -1);
-        return { value: calcMonth(p.y, p.m).end, explicit: false, projected: true };
-      }
-      return { value: 0, explicit: false };
+        r = { value: calcMonth(p.y, p.m).end, explicit: false, projected: true };
+      } else if (monthIdx(y, m) > dataStartIdx()) {
+        // Баланс не вводили — берём остаток прошлого месяца
+        const p = addMonths(y, m, -1);
+        r = { value: calcMonth(p.y, p.m).end, explicit: false, carried: true, fromM: p.m };
+      } else r = { value: 0, explicit: false };
+      startMemo[key] = r;
+      return r;
     }
 
     function calcMonth(y, m) {
@@ -1559,8 +1584,7 @@
         let acc = 0, pending = 0, pendingDays = 0;
         for (let d = sd; d < t; d++) {
           const delta = norm - spentDay[d];
-          if (delta > 0.5 && !state.closed[dateKey(y, m, d)]) { pending += delta; pendingDays++; }
-          else acc += delta;
+          acc += delta; // недотраченное копится само; забытая трата, внесённая позже, просто уменьшит накопление
         }
         r.accBefore = acc; r.pending = pending; r.pendingDays = pendingDays;
         r.cumAvail = acc + norm - spentToday;
@@ -2103,7 +2127,7 @@
     }
 
     function render() {
-      enfMemo = {}; stashMemo = null;
+      enfMemo = {}; stashMemo = null; startMemo = {}; firstIdxMemo = null;
       applyUi();
       const c = calcMonth(view.y, view.m);
       renderSummary(c);
@@ -2136,7 +2160,7 @@
         const dt = new Date(n.y, n.m, n.d);
         const allow = Math.max(0, c.allowToday);
 
-        const unsetStart = !c.start.explicit;
+        const unsetStart = !c.start.explicit && !c.start.carried;
         if (unsetStart && state.incomes.length === 0 && state.debts.length === 0 && state.bills.length === 0) {
           html += '<div class="alert info"><b>С чего начать:</b> укажите баланс в «Настройках», добавьте доходы и долги.<br><button class="btn small" data-action="goto-tab" data-tab="settings">Открыть настройки</button></div>';
         } else if (unsetStart) {
@@ -2153,10 +2177,7 @@
           html += '<div class="alert ' + t.type + '"' + (t.tab ? ' data-action="goto-tab" data-tab="' + t.tab + '"' : "") + '>' + t.text + '</div>';
         });
 
-        if (c.pendingDays > 0) {
-          html += '<div class="alert info">Не отмечено дней: ' + c.pendingDays + ". Недотраченное (<b>+" + fmt(c.pending) + "</b>) ждёт подтверждения.<br>" +
-            '<button class="btn small" data-action="close-past">Подтвердить все дни ✓</button></div>';
-        }
+
 
         // % использования дневного лимита (как «выполнено» на скрине)
         const usedPct = allow > 0 ? Math.min(100, Math.round(c.spentToday / allow * 100)) : (c.spentToday > 0 ? 100 : 0);
@@ -2239,7 +2260,7 @@
           "</div>";
       }
       b += '<div class="card"><div class="card-title">Баланс месяца</div>';
-      b += row("Баланс на начало", fmt(c.start.value), "", c.start.projected ? "прогноз" : "");
+      b += row("Баланс на начало", fmt(c.start.value), "", c.start.projected ? "прогноз" : c.start.carried ? "остаток за " + MONTHS[c.start.fromM].toLowerCase() + " — перенесён сам" : "");
       if (c.loanSum > 0) b += row("Получено в долг", "+" + fmt(c.loanSum), "green");
       if (c.kind === "past") {
         b += row("Пришло доходов", "+" + fmt(c.incomeArrived), "green");
@@ -2425,9 +2446,8 @@
         $("daysLeftLabel").textContent = c.D + " " + plural(c.D, "день", "дня", "дней");
         $("daysLeftSub").textContent = "в месяце";
       }
-      const unclosed = (() => { if (c.kind !== "current") return 0; let k = 0; for (let d = c.sd; d < c.t; d++) if (!state.closed[dateKey(c.y, c.m, d)]) k++; return k; })();
-      $("daysAction").innerHTML = unclosed > 0
-        ? '<button class="btn small secondary" style="margin-top:12px" data-action="close-past">Закрыть прошедшие дни (' + unclosed + ")</button>" : "";
+      $("daysAction").innerHTML = c.kind === "current" && c.accBefore > 0.5
+        ? '<div class="sub-text" style="margin-top:12px">Накоплено за прошедшие дни: <b class="green">+' + fmt(c.accBefore) + "</b></div>" : "";
 
       let html = "";
       for (let d = 1; d <= c.D; d++) {
@@ -2438,7 +2458,7 @@
         const isPast = c.kind === "past" || (isCur && d < c.t);
         const closed = !!state.closed[key];
         const dt = new Date(c.y, c.m, d), wdi = dt.getDay();
-        let status = !inScope ? "до начала расчёта" : isToday ? "сегодня" : isPast ? (closed ? "день закрыт" : "не отмечен") : "впереди";
+        let status = !inScope ? "до начала расчёта" : isToday ? "сегодня" : isPast ? (spent > 0 ? "прошёл" : "без трат") : "впереди";
         let chips = "";
         c.incs.forEach(i => { if (i.eff === d) chips += '<span class="chip in">+ ' + esc(i.name) + " " + fmt(i.net) + '</span>'; });
         const norm = c.norm;
@@ -2447,8 +2467,7 @@
         let delta = "";
         if (inScope && c.kind !== "future" && isPast && norm > 0) {
           const dl = norm - spent;
-          if (dl > 0.5 && !closed && c.kind === "current") delta = '<small class="orange">+' + Math.round(dl).toLocaleString("ru-RU") + " · не засчитано</small>";
-          else delta = '<small class="' + (dl >= 0 ? "green" : "orange") + '">' + (dl >= 0 ? "+" : "−") + Math.abs(Math.round(dl)).toLocaleString("ru-RU") + "</small>";
+          delta = '<small class="' + (dl >= 0 ? "green" : "orange") + '">' + (dl >= 0 ? "+" : "−") + Math.abs(Math.round(dl)).toLocaleString("ru-RU") + "</small>";
         }
         html += '<div class="day-row ' + (isToday ? "today " : "") + (isPast ? "past " : "") + (inScope ? "" : "off ") + (wdi === 0 || wdi === 6 ? "weekend" : "") + '" data-action="open-day" data-day="' + d + '">' +
           '<div class="day-num"><div class="d">' + d + '</div><div class="wd">' + WEEKDAYS[wdi] + '</div></div>' +
@@ -2456,7 +2475,6 @@
             (chips ? '<div class="chips">' + chips + '</div>' : "") +
             '<div class="day-bar"><div class="day-bar-fill ' + (over ? "over" : "") + '" style="width:' + pct + '%"></div></div></div>' +
           '<div class="day-spend">' + (spent > 0 ? fmt(spent) : "—") + delta + '</div>' +
-          '<button class="day-check ' + (closed ? "checked" : "") + '" data-action="toggle-closed" data-day="' + d + '">' + (closed ? "✓" : "") + '</button>' +
           '</div>';
       }
       el.innerHTML = html;
@@ -2832,7 +2850,7 @@
       if (!busy) {
         const cur = c.kind === "current";
         sb.value = typeof ms.start === "number" ? ms.start : "";
-        sb.placeholder = c.start.projected ? "Авто: " + fmt(c.start.value) : "Сколько денег у вас на руках";
+        sb.placeholder = c.start.projected || c.start.carried ? "Авто: " + fmt(c.start.value) + (c.start.carried ? " (остаток за " + MONTHS[c.start.fromM].toLowerCase() + ")" : "") : "Сколько денег у вас на руках";
         const selMode = ms.startAfter ? "now" : (ms.startDay > 1 ? "day" : (cur && typeof ms.start !== "number" ? "now" : "month"));
         let opts = "";
         if (cur) opts += '<option value="now">Сейчас, на момент ввода</option>';
@@ -2962,7 +2980,6 @@
         const todayB = c.bills.filter(b => !b.paid && b.eff === c.t).length;
         if (late) pill.bills = ["red", late + " просроч."];
         else if (todayB) pill.bills = ["orange", "сегодня"];
-        if (c.pendingDays > 0) pill.days = ["orange", "отметить " + c.pendingDays];
       }
       const lateDebts = state.debts.filter(d => !d.enforced && d.due && d.due < tk && remaining(d) > 0).length;
       if (lateDebts) pill.debts = ["red", lateDebts + " просроч."];
@@ -3015,7 +3032,7 @@
         const dt = new Date(c.y, c.m, d), v = d >= c.sd ? c.spentDay[d] : daySpent(dateKey(c.y, c.m, d));
         const isToday = c.kind === "current" && d === c.t, fut = c.kind === "future" || (c.kind === "current" && d > c.t);
         const over = !fut && c.norm > 0 && v > c.norm + 0.5;
-        const pend = c.kind === "current" && d >= c.sd && d < c.t && v + 0.5 < c.norm && !state.closed[dateKey(c.y, c.m, d)];
+        const pend = false;
         const val = v > 0 ? (v >= 10000 ? Math.round(v / 1000) + "к" : Math.round(v).toLocaleString("ru-RU")) : (fut ? "" : "0");
         strip += '<div class="dstrip-d' + (isToday ? " today" : "") + (fut ? " fut" : "") + (over ? " over" : "") + (pend ? " pend" : "") +
           ([0, 6].includes(dt.getDay()) ? " we" : "") + '" data-action="open-day" data-day="' + d + '"' + (isToday ? ' id="dstripToday"' : "") + ">" +
@@ -3565,8 +3582,7 @@
             '<button class="btn small danger" data-action="del-spend" data-key="' + key + '" data-id="' + s.id + '" data-reopen="' + day + '">×</button></div></div>').join("")
         : '<div class="empty" style="padding:16px">Трат нет</div>';
       body += '<div style="display:flex;gap:8px;margin-top:14px">' +
-        '<button class="btn" style="flex:1" data-action="add-spend-day" data-day="' + day + '">+ трата</button>' +
-        '<button class="btn secondary" style="flex:1" data-action="toggle-closed" data-day="' + day + '" data-reopen="' + day + '">' + (closed ? "Снять отметку" : "День закрыт ✓") + '</button></div>';
+        '<button class="btn" style="flex:1" data-action="add-spend-day" data-day="' + day + '">+ трата за этот день</button></div>';
       openModal(day + " " + MONTHS_GEN[view.m], body, "day", { day }, { hideSave: true });
     }
 
