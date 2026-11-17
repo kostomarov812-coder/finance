@@ -134,6 +134,24 @@
     .hub-hero .hero-bar > div.over { background: var(--orange); }
     .hub-hero .hero-foot { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; color: var(--muted); margin-top: 8px; }
     .hub-hero .hero-foot b { color: var(--text); font-weight: 700; }
+    .hub-hero { display: block; cursor: pointer; }
+    .dstrip-head { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: var(--muted); margin: 16px 0 8px; }
+    .dstrip-head .pend-t { color: var(--orange); font-weight: 700; }
+    .dstrip-link { color: var(--blue-text); font-weight: 600; padding: 4px 0 4px 10px; }
+    .dstrip { display: flex; gap: 6px; overflow-x: auto; margin: 0 -20px -4px; padding: 2px 20px 6px; scroll-snap-type: x proximity; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+    .dstrip::-webkit-scrollbar { display: none; }
+    .dstrip-d { flex: 0 0 46px; scroll-snap-align: center; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 7px 0 8px;
+      border-radius: 12px; background: color-mix(in srgb, var(--text) 6%, transparent); position: relative; transition: transform .15s ease; }
+    .dstrip-d:active { transform: scale(.94); }
+    .dstrip-d .wd { font-size: 10px; font-weight: 600; color: var(--muted); text-transform: uppercase; }
+    .dstrip-d.we .wd { color: #f87171; }
+    .dstrip-d .dn { font-size: 16px; font-weight: 700; line-height: 1.15; }
+    .dstrip-d .dv { font-size: 10px; font-weight: 600; color: var(--muted); font-variant-numeric: tabular-nums; min-height: 13px; }
+    .dstrip-d.over .dv { color: var(--orange); }
+    .dstrip-d.fut { opacity: .45; }
+    .dstrip-d.today { background: var(--blue); }
+    .dstrip-d.today .wd, .dstrip-d.today .dv, .dstrip-d.today .dn { color: #fff; }
+    .dstrip-d.pend::after { content: ""; position: absolute; top: 5px; right: 6px; width: 5px; height: 5px; border-radius: 50%; background: var(--orange); }
     .hub-section { font-size: 12px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase; color: var(--muted2); margin: 20px 4px 10px; }
 
     .hub-item {
@@ -1057,7 +1075,7 @@
           id: String(i.id || uid()), name: String(i.name || "Доход"), amount: num(i.amount),
           day: Math.min(31, Math.max(1, Math.round(num(i.day)) || 1)), note: String(i.note || ""),
           monthly: i.monthly !== false, from: String(i.from || "2000-01"), month: String(i.month || ""),
-          withhold: Math.min(100, Math.max(0, num(i.withhold)))
+          withhold: Math.min(100, Math.max(0, num(i.withhold))), passive: !!i.passive
         }));
         s.debts = (Array.isArray(raw.debts) ? raw.debts : []).map(d => ({
           id: String(d.id || uid()), name: String(d.name || "Долг"), amount: num(d.amount), note: String(d.note || ""),
@@ -1394,7 +1412,10 @@
       const n = now(), c = calcMonth(n.y, n.m), st = stashInfo(), rate = state.deposit.rate;
       const assets = state.assets.filter(a => a.kind === "asset"), liabs = state.assets.filter(a => a.kind === "liab");
       const stashMonthly = st.total * rate / 100 / 12;
-      const passive = stashMonthly + sum(assets, a => a.monthly);
+      // Пассивные доходы из «Доходов» (сдача квартиры и т. п.) — постоянные, на руки
+      const passiveIncs = incomesFor(n.y, n.m).filter(i => i.passive && i.monthly);
+      const passiveIncome = sum(passiveIncs, i => i.net);
+      const passive = stashMonthly + passiveIncome + sum(assets, a => a.monthly);
       const billsMonthly = sum(billsFor(n.y, n.m), b => b.amount);
       const debtsLeft = totalDebtsRemaining();
       // Исполнительные листы: что приставы удерживают с доходов этого месяца (со всех, а не только «после ввода баланса»)
@@ -1410,7 +1431,7 @@
       const exp = monthlyExpenses();
       const share = exp.value > 0 ? passive / exp.value * 100 : 0;
       return { c, st, rate, assets, liabs, stashMonthly, passive, billsMonthly, debtsLeft, debtMonthly, drain, cash, worth, exp,
-        ipMonthly, ipNominal, ipLeft, ipTotal, plainLeft, plainMonthly,
+        ipMonthly, ipNominal, ipLeft, ipTotal, plainLeft, plainMonthly, passiveIncs, passiveIncome,
         ipShare: grossM > 0 ? Math.round(ipMonthly / grossM * 100) : 0,
         incNet: sum(allIncs.filter(i => i.monthly), i => i.net),
         freedom: share >= 10 ? Math.round(share) : Math.round(share * 10) / 10,
@@ -2093,7 +2114,7 @@
           (a && a.save > 0.5 ? (inc.withhold > 0 ? " · " : "") + "в копилку " + fmt(a.save) : "");
         return '<div class="item' + (a ? "" : " dim") + '">' +
           '<div class="item-info"><div class="item-name">' + esc(inc.name) + '</div>' +
-          '<div class="item-meta">' + status + '<span>' + inc.day + "-е · " + (inc.monthly ? "каждый месяц" : "разовый") + (holdNote ? " · " + holdNote : "") + '</span></div></div>' +
+          '<div class="item-meta">' + status + (inc.passive ? '<span class="badge green">пассивный</span>' : "") + '<span>' + inc.day + "-е · " + (inc.monthly ? "каждый месяц" : "разовый") + (holdNote ? " · " + holdNote : "") + '</span></div></div>' +
           '<div class="item-amount green">' + fmt(inc.amount) + '</div>' +
           '<div class="item-actions">' +
             '<button class="btn small secondary" data-action="edit-income" data-id="' + inc.id + '">✎</button>' +
@@ -2453,7 +2474,7 @@
         '<circle class="ring-fill" cx="42" cy="42" r="' + ringR + '" stroke-dasharray="' + ringC.toFixed(1) + '" stroke-dashoffset="' + (ringC * (1 - ringPct / 100)).toFixed(1) + '"></circle>' +
         '</svg><div class="ring-text">' + Math.round(ringPct) + "%</div></div></div>" +
         '<div style="margin-top:14px">' +
-        row("Пассивный доход", (cap.passive >= 0.5 ? "+" : "") + fmt(cap.passive) + "/мес", cap.passive > 0 ? "green" : "", "копилка и активы работают сами") +
+        row("Пассивный доход", (cap.passive >= 0.5 ? "+" : "") + fmt(cap.passive) + "/мес", cap.passive > 0 ? "green" : "", "копилка, активы и пассивные доходы") +
         (exp.value > 0
           ? row('Расходы на жизнь <button type="button" class="linkbtn" style="color:var(--blue-text)" data-action="stash-exp">изменить</button>', fmt(exp.value) + "/мес", "", exp.src) +
             row("Дней в месяце за счёт активов", fmtDays(Math.min(30, cap.freedom / 100 * 30)).replace("меньше дня", "< 1 дня"), "", "из 30")
@@ -2506,9 +2527,10 @@
 
       h += '<div class="card"><div class="card-title-row"><div class="card-title">Активы · кладут деньги в карман</div><button type="button" class="linkbtn" style="color:var(--blue-text)" data-action="add-asset" data-kind="asset">+ актив</button></div>' +
         auto("Копилка", "накоплено " + fmt(cap.st.total), (cap.stashMonthly >= 0.5 ? "+" : "") + fmt(cap.stashMonthly) + "/мес", cap.stashMonthly >= 0.5 ? "green" : "", "stash") +
+        cap.passiveIncs.map(i => auto(esc(i.name), "из «Доходов» · " + i.eff + "-го числа", "+" + fmt(i.net) + "/мес", "green", "incomes")).join("") +
         (cap.cash > 0 ? auto("Деньги на руках", fmt(cap.cash) + " · лежат без дела", "0 ₽/мес", "", "summary") : "") +
         cap.assets.map(a => manual(a, "+", "green")).join("") +
-        '<p class="hint">Актив — то, что приносит деньги без вашей ежедневной работы: вклад, сдача жилья, дивиденды, своё дело.</p></div>';
+        '<p class="hint">Актив — то, что приносит деньги без вашей работы. Если деньги с него реально приходят (аренда квартиры, проценты на карту) — заведите их в «Доходах» с галочкой «Пассивный доход»: тогда они попадут и в бюджет, и сюда. Вручную здесь — только то, чего нет в доходах, например стоимость квартиры.</p></div>';
 
       h += '<div class="card"><div class="card-title-row"><div class="card-title">Пассивы · вынимают деньги</div><button type="button" class="linkbtn" style="color:var(--blue-text)" data-action="add-asset" data-kind="liab">+ пассив</button></div>' +
         (cap.ipLeft > 0 || cap.ipMonthly > 0 ? auto("Исполнительные листы", "осталось " + fmt(cap.ipLeft) + (cap.ipShare ? " · " + cap.ipShare + "% дохода" : ""), "−" + fmt(cap.ipMonthly) + "/мес", cap.ipMonthly > 0 ? "red" : "", "debts") : "") +
@@ -2709,7 +2731,7 @@
       const CLS = { summary: "c-sum", incomes: "c-inc", bills: "c-bill", debts: "c-debt", days: "c-day", stats: "c-stat",
         stash: "c-stash", capital: "c-cap", buy: "c-buy", deposit: "c-dep", assistant: "c-bot", settings: "c-set" };
       const GROUPS = [
-        ["Каждый день", ["summary", "days", "stats"]],
+        ["Каждый день", ["summary", "stats"]],
         ["Деньги месяца", ["incomes", "bills", "debts"]],
         ["Будущее", ["stash", "capital", "buy", "deposit"]],
         ["Помощь", ["assistant", "settings"]]
@@ -2733,7 +2755,23 @@
           '<div class="hero-sub">' + (c.kind === "future" ? "прогноз остатка · норма " + fmt(c.norm) + " в день" : "остаток на конец месяца · потрачено " + fmt(c.spentMonth)) + "</div>";
       }
 
-      let html = '<button class="hub-hero" data-action="goto-tab" data-tab="summary">' + hero + "</button>", i = 0;
+      // Полоса дней месяца: сколько потрачено в каждый день, сверх нормы — оранжевым. Нажатие открывает день.
+      let strip = "";
+      for (let d = 1; d <= c.D; d++) {
+        const dt = new Date(c.y, c.m, d), v = d >= c.sd ? c.spentDay[d] : daySpent(dateKey(c.y, c.m, d));
+        const isToday = c.kind === "current" && d === c.t, fut = c.kind === "future" || (c.kind === "current" && d > c.t);
+        const over = !fut && c.norm > 0 && v > c.norm + 0.5;
+        const pend = c.kind === "current" && d >= c.sd && d < c.t && v + 0.5 < c.norm && !state.closed[dateKey(c.y, c.m, d)];
+        const val = v > 0 ? (v >= 10000 ? Math.round(v / 1000) + "к" : Math.round(v).toLocaleString("ru-RU")) : (fut ? "" : "0");
+        strip += '<div class="dstrip-d' + (isToday ? " today" : "") + (fut ? " fut" : "") + (over ? " over" : "") + (pend ? " pend" : "") +
+          ([0, 6].includes(dt.getDay()) ? " we" : "") + '" data-action="open-day" data-day="' + d + '"' + (isToday ? ' id="dstripToday"' : "") + ">" +
+          '<span class="wd">' + WEEKDAYS[dt.getDay()] + '</span><span class="dn">' + d + '</span><span class="dv">' + val + "</span></div>";
+      }
+      const pendN = c.kind === "current" ? c.pendingDays : 0;
+      const stripHtml = '<div class="dstrip-head"><span>Дни месяца' + (pendN ? ' · <b class="pend-t">' + pendN + " " + plural(pendN, "день", "дня", "дней") + " отметить</b>" : "") + '</span>' +
+        '<span class="dstrip-link" data-action="goto-tab" data-tab="days">списком ›</span></div><div class="dstrip" id="dstrip">' + strip + "</div>";
+
+      let html = '<div class="hub-hero" role="button" tabindex="0" data-action="goto-tab" data-tab="summary">' + hero + stripHtml + "</div>", i = 0;
       GROUPS.forEach(([title, ids]) => {
         html += '<div class="hub-section">' + title + "</div>";
         ids.forEach(id => {
@@ -2748,6 +2786,9 @@
         });
       });
       $("hubList").innerHTML = html;
+      // Прокрутить полосу так, чтобы сегодняшний день был виден
+      const ds = $("dstrip"), td = $("dstripToday");
+      if (ds && td) ds.scrollLeft = Math.max(0, td.offsetLeft - ds.clientWidth / 2 + td.offsetWidth / 2);
     }
 
     // ===== Оформление =====
@@ -3043,6 +3084,8 @@
         '<div class="form-row"><div class="field-label">Как часто</div><select id="m-repeat">' +
           '<option value="monthly"' + (inc.monthly !== false ? " selected" : "") + '>Каждый месяц</option>' +
           '<option value="once"' + (inc.monthly === false ? " selected" : "") + '>Один раз</option></select></div>' +
+        '<label class="form-row" style="display:flex;gap:12px;align-items:flex-start;cursor:pointer"><input id="m-passive" type="checkbox" style="width:22px;height:22px;flex-shrink:0;margin-top:1px;accent-color:var(--blue)"' + (inc.passive ? " checked" : "") + ' />' +
+          '<span><b>Пассивный доход</b><br><span class="hint" style="margin:0">приходит без вашей работы: сдача квартиры, проценты, дивиденды. Попадёт в «Капитал» и счётчик свободы</span></span></label>' +
         '<div class="form-row"><div class="field-label">Удержание по ИП, %</div><input id="m-hold" type="number" inputmode="decimal" placeholder="0" value="' + (inc.withhold || "") + '" /></div>' +
         '<div class="form-row"><input id="m-note" placeholder="Заметка" value="' + esc(inc.note || "") + '" /></div>',
         "income", { id: edit ? edit.id : null });
@@ -3116,7 +3159,7 @@
           '<option value="asset"' + (liab ? "" : " selected") + '>Актив — приносит деньги</option>' +
           '<option value="liab"' + (liab ? " selected" : "") + '>Пассив — забирает деньги</option></select></div>' +
         '<div class="form-row"><input id="m-name" placeholder="Название: вклад, квартира, кредит…" value="' + esc(a.name) + '" /></div>' +
-        '<div class="form-row"><div class="field-label">Сколько в месяц приносит или забирает, ₽</div><input id="m-monthly" type="number" inputmode="decimal" placeholder="0" value="' + (a.monthly || "") + '" /></div>' +
+        '<div class="form-row"><div class="field-label">Сколько в месяц приносит или забирает, ₽ — если этого нет в «Доходах» и «Платежах»</div><input id="m-monthly" type="number" inputmode="decimal" placeholder="0" value="' + (a.monthly || "") + '" /></div>' +
         '<div class="form-row"><div class="field-label">Стоимость или остаток долга, ₽ (необязательно)</div><input id="m-value" type="number" inputmode="decimal" placeholder="0" value="' + (a.value || "") + '" /></div>' +
         '<div class="form-row"><input id="m-note" placeholder="Заметка" value="' + esc(a.note || "") + '" /></div>',
         "asset", { id: edit ? edit.id : null });
@@ -3180,18 +3223,18 @@
       if (mode === "income") {
         const name = $("m-name").value.trim(), amount = num($("m-amount").value), day = num($("m-day").value) || 1;
         const monthly = $("m-repeat").value === "monthly", note = $("m-note").value.trim();
-        const withhold = Math.min(100, Math.max(0, num($("m-hold").value)));
+        const withhold = Math.min(100, Math.max(0, num($("m-hold").value))), passive = $("m-passive").checked;
         if (!name || amount <= 0) return toast("Укажите название и сумму");
         const vk = monthKey(view.y, view.m);
         if (ctx.id) {
           const inc = state.incomes.find(x => x.id === ctx.id);
           if (inc) {
-            Object.assign(inc, { name, amount, day, note, monthly, withhold });
+            Object.assign(inc, { name, amount, day, note, monthly, withhold, passive });
             // Был ежемесячным, стал разовым — привязываем к открытому месяцу, иначе доход «пропадал»
             if (!monthly && !inc.month) inc.month = vk;
           }
         } else {
-          state.incomes.push({ id: uid(), name, amount, day, note, monthly, withhold, from: vk, month: monthly ? "" : vk });
+          state.incomes.push({ id: uid(), name, amount, day, note, monthly, withhold, passive, from: vk, month: monthly ? "" : vk });
         }
       } else if (mode === "debt") {
         const name = $("m-name").value.trim(), amount = num($("m-amount").value), note = $("m-note").value.trim();
