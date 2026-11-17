@@ -812,6 +812,42 @@
     .ins-t { font-size: 14px; font-weight: 600; line-height: 1.35; margin-top: 2px; }
     .ins-side { color: var(--blue-text); opacity: .85; flex-shrink: 0; }
     .ins-side svg { width: 30px; height: 30px; }
+
+    /* ===== 3D-иконки: подсветка и анимация ===== */
+    .ico { --g: rgba(255,59,48,.55); position: relative; display: inline-flex; flex-shrink: 0; width: 44px; height: 44px; isolation: isolate; }
+    .ico::before {
+      content: ""; position: absolute; inset: 12% 8% -6%; z-index: -1; border-radius: 40%;
+      background: radial-gradient(closest-side, var(--g), transparent); filter: blur(7px);
+      opacity: .55; animation: icoGlow 3.6s ease-in-out infinite; animation-delay: var(--d, 0s);
+    }
+    .ico img {
+      width: 100%; height: 100%; display: block; border-radius: 24%; user-select: none; -webkit-user-drag: none;
+      box-shadow: 0 6px 14px -6px rgba(0,0,0,.7), 0 0 0 1px rgba(255,255,255,.06);
+      animation: icoIn .5s cubic-bezier(.22, 1.4, .36, 1) both, icoFloat 4.2s ease-in-out infinite;
+      animation-delay: calc(var(--d, 0s) * .3), var(--d, 0s);
+      transition: transform .2s cubic-bezier(.22, 1.4, .36, 1), filter .2s ease;
+    }
+    @keyframes icoGlow { 0%, 100% { opacity: .4; transform: scale(.92); } 50% { opacity: .85; transform: scale(1.06); } }
+    @keyframes icoFloat { 0%, 100% { translate: 0 0; } 50% { translate: 0 -2px; } }
+    @keyframes icoIn { from { opacity: 0; transform: scale(.6) rotate(-8deg); } to { opacity: 1; transform: none; } }
+    :active > .ico img, :active > * > .ico img, .ico:active img { transform: scale(1.1) rotate(-3deg); filter: brightness(1.15); }
+    :active > .ico::before, :active > * > .ico::before { opacity: 1; }
+    .hi.has-ico { background: none !important; width: auto !important; height: auto !important; overflow: visible; }
+    .hub-item .ico { width: 50px; height: 50px; }
+    .tile .ico { width: 34px; height: 34px; }
+    .tile .tile-h { gap: 7px; }
+    .tile .tile-h .tt { font-size: 13.5px; }
+    .hbar-head { align-items: center; }
+    .tile .ico::before { filter: blur(5px); }
+    .ico.ico-sm { width: 34px; height: 34px; }
+    .ico.ico-sm::before { filter: blur(5px); opacity: .45; animation: none; }
+    .ico.ico-sm img { animation: icoIn .4s ease both; }
+    .ico.ico-title { width: 36px; height: 36px; align-self: center; margin-right: -4px; }
+    .pivot h1 { display: inline-flex; align-items: center; gap: 12px; }
+    .item > .ico { margin-right: -2px; }
+    .hbar-head .n { display: inline-flex; align-items: center; gap: 10px; }
+    .hbar-head .ico.ico-sm { width: 28px; height: 28px; }
+    [data-theme="light"] .ico img { box-shadow: 0 6px 14px -6px rgba(15,23,42,.45); }
   </style>
 </head>
 <body>
@@ -2274,7 +2310,7 @@
       const list = state.spends[key] || [];
       if (!list.length) { el.innerHTML = '<div class="empty" style="padding:14px">Трат сегодня пока нет</div>'; return; }
       el.innerHTML = list.map(s =>
-        '<div class="item">' +
+        '<div class="item">' + catIco(s.cat) +
           '<div class="item-info"><div class="item-name">' + esc(s.name) + '</div>' +
           '<div class="item-meta"><span class="' + catClass(s.cat) + '">' + catLabel(s.cat) + '</span></div></div>' +
           '<div class="item-amount red">' + fmt(s.amount) + '</div>' +
@@ -2545,7 +2581,7 @@
         }
         const cnt = spends.filter(s => s.cat === id).length;
         return '<div class="hbar" data-action="cat-detail" data-cat="' + id + '">' +
-          '<div class="hbar-head"><span class="n">' + catLabel(id) + '</span><span class="v">' + fmt(v) + "</span></div>" +
+          '<div class="hbar-head"><span class="n">' + catIco(id) + catLabel(id) + '</span><span class="v">' + fmt(v) + "</span></div>" +
           '<div class="hbar-track"><div style="width:' + (v / top * 100).toFixed(1) + '%"></div></div>' +
           '<div class="hbar-sub">' + share + "% · " + cnt + " " + plural(cnt, "трата", "траты", "трат") + cmp + "</div></div>";
       }).join("") + '<p class="hint">Нажмите на категорию — покажу все траты в ней.</p></div>';
@@ -2554,7 +2590,7 @@
       const big = spends.slice().sort((a, b) => b.amount - a.amount).slice(0, 5);
       h += '<div class="card"><div class="card-title">Самые крупные траты</div>' + big.map(s => {
         const d = Number(s.key.slice(8, 10));
-        return '<div class="item"><div class="item-info"><div class="item-name">' + esc(s.name) + '</div><div class="item-meta"><span class="' + catClass(s.cat) + '">' + catLabel(s.cat) + "</span><span>" + d + " " + MONTHS_GEN[c.m] + "</span></div></div>" +
+        return '<div class="item">' + catIco(s.cat) + '<div class="item-info"><div class="item-name">' + esc(s.name) + '</div><div class="item-meta"><span class="' + catClass(s.cat) + '">' + catLabel(s.cat) + "</span><span>" + d + " " + MONTHS_GEN[c.m] + "</span></div></div>" +
           '<div class="item-amount red">' + fmt(s.amount) + "</div>" +
           '<div class="item-actions"><button class="btn small secondary" data-action="edit-spend" data-key="' + s.key + '" data-id="' + s.id + '">✎</button></div></div>';
       }).join("") + "</div>";
@@ -2568,7 +2604,7 @@
       const body = '<div class="sub-text" style="margin:-8px 0 12px">' + monthLabel(view.y, view.m) + " · " + fmt(total) + "</div>" +
         (list.length ? list.map(s => {
           const d = Number(s.key.slice(8, 10));
-          return '<div class="item"><div class="item-info"><div class="item-name">' + esc(s.name) + '</div><div class="item-meta"><span>' + d + " " + MONTHS_GEN[view.m] + "</span></div></div>" +
+          return '<div class="item">' + catIco(s.cat) + '<div class="item-info"><div class="item-name">' + esc(s.name) + '</div><div class="item-meta"><span>' + d + " " + MONTHS_GEN[view.m] + "</span></div></div>" +
             '<div class="item-amount red">' + fmt(s.amount) + "</div>" +
             '<div class="item-actions"><button class="btn small secondary" data-action="edit-spend" data-key="' + s.key + '" data-id="' + s.id + '">✎</button></div></div>';
         }).join("") : '<div class="empty">Трат нет</div>') +
@@ -2852,7 +2888,8 @@
       lab.textContent = MONTHS[view.m] + " " + view.y;
       lab.classList.toggle("off", c.kind !== "current");
       const tool = TOOLS.find(t => t.id === current);
-      $("pageTitle").textContent = tool ? tool.title : "Финансы";
+      const pt = $("pageTitle"), ptKey = tool ? tool.id : "hub";
+      if (pt.dataset.p !== ptKey) { pt.dataset.p = ptKey; pt.innerHTML = tool ? (ICO[tool.id] ? ico(tool.id, "ico-title") : "") + esc(tool.title) : "Финансы"; }
 
       // Контекстная кнопка «+»
       const fab = $("abAdd"), fabLabel = $("fabLabel");
@@ -2990,7 +3027,7 @@
 
       // 3. Плитки
       const tile = (id, o) => '<button class="tile' + (o.cls ? " " + o.cls : "") + '" data-action="goto-tab" data-tab="' + id + '" style="animation-delay:' + o.delay + 's">' +
-        '<div class="tile-h"><span class="hi ' + CLS[id] + '">' + ICONS[id] + '</span><span class="tt">' + o.title + "</span>" +
+        '<div class="tile-h"><span class="hi has-ico">' + ico(id) + '</span><span class="tt">' + o.title + "</span>" +
         (o.badge && o.cls && o.cls.includes("wide") ? '<span class="pill ' + o.badge[0] + '">' + o.badge[1] + "</span>" : '<span class="chev"></span>') + "</div>" +
         (o.row || ('<div class="tile-k">' + o.k + '</div><div class="tile-v' + (o.vcls ? " " + o.vcls : "") + '">' + o.v + "</div>")) +
         (o.badge && !(o.cls && o.cls.includes("wide")) ? '<div style="margin-top:6px"><span class="pill ' + o.badge[0] + '">' + o.badge[1] + "</span></div>" : "") +
@@ -3049,6 +3086,7 @@
         '<span class="ins-body"><span class="ins-k" style="display:block">Умная подсказка</span><span class="ins-t" style="display:block">' + ins.text + "</span></span>" +
         '<span class="ins-side"><svg viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z"/><path d="M8.5 12l2.5 2.5 4.5-5"/></svg></span></button>' : "";
 
+      icoN = 0;
       let html = '<div class="hub-hero" role="button" tabindex="0" data-action="goto-tab" data-tab="summary">' + hero + "</div>" + stripHtml +
         '<div class="hub-grid">' + tile("summary", Object.assign(tSum, { delay: .08 })) + tile("stats", Object.assign(tStat, { delay: .11 })) +
         tile("incomes", Object.assign(tInc, { delay: .14 })) + tile("bills", Object.assign(tBill, { delay: .17 })) + tile("debts", Object.assign(tDebt, { delay: .2 })) + "</div>" + insHtml;
@@ -3062,7 +3100,7 @@
           if (!t) return;
           const p = pill[id];
           html += '<button class="hub-item" data-action="goto-tab" data-tab="' + id + '" style="animation-delay:' + (0.24 + i++ * 0.03).toFixed(2) + 's">' +
-            '<div class="hi ' + CLS[id] + '">' + ICONS[id] + "</div>" +
+            '<div class="hi has-ico">' + ico(id) + "</div>" +
             '<div class="body"><div class="t">' + t.title + '</div><div class="s">' + esc(sub[id] || "") + "</div></div>" +
             (p ? '<span class="pill ' + p[0] + '">' + p[1] + "</span>" : "") +
             '<div class="chev"></div></button>';
@@ -3095,6 +3133,16 @@
       const r = currentRule();
       return r ? { text: r.title + ": " + r.text.replace(/<[^>]+>/g, ""), tab: r.tab || "summary" } : null;
     }
+
+
+    // ===== 3D-иконки разделов и категорий =====
+    const ICO = { summary: 1, stats: 1, incomes: 1, bills: 1, debts: 1, days: 1, stash: 1, capital: 1, buy: 1, deposit: 1, assistant: 1, settings: 1 };
+    let icoN = 0;
+    function ico(name, cls) {
+      const d = ((icoN++ * 0.37) % 2.4).toFixed(2); // разный сдвиг — иконки «дышат» не в такт
+      return '<span class="ico' + (cls ? " " + cls : "") + '" style="--d:' + d + 's"><img src="ic/' + name + '.webp" alt="" decoding="async" draggable="false"></span>';
+    }
+    const catIco = (cat, cls) => ico("c-" + (CATEGORIES[cat] ? cat : "other"), cls || "ico-sm");
 
     // ===== Оформление =====
     function hexRgb(h) { return [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16)); }
@@ -3511,7 +3559,7 @@
       const closed = !!state.closed[key];
       let body = list.length
         ? list.map(s =>
-            '<div class="item"><div class="item-info"><div class="item-name">' + esc(s.name) + '</div><div class="item-meta"><span class="' + catClass(s.cat) + '">' + catLabel(s.cat) + '</span></div></div>' +
+            '<div class="item">' + catIco(s.cat) + '<div class="item-info"><div class="item-name">' + esc(s.name) + '</div><div class="item-meta"><span class="' + catClass(s.cat) + '">' + catLabel(s.cat) + '</span></div></div>' +
             '<div class="item-amount red">' + fmt(s.amount) + '</div>' +
             '<div class="item-actions"><button class="btn small secondary" data-action="edit-spend" data-key="' + key + '" data-id="' + s.id + '">✎</button>' +
             '<button class="btn small danger" data-action="del-spend" data-key="' + key + '" data-id="' + s.id + '" data-reopen="' + day + '">×</button></div></div>').join("")

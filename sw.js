@@ -1,6 +1,7 @@
 // Сначала сеть (чтобы обновления приходили сразу), без интернета — сохранённая копия.
-const CACHE = "finance-v8";
-const FILES = ["./", "./index.html", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png", "./apple-touch-icon.png"];
+const CACHE = "finance-v9";
+const FILES = ["./", "./index.html", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png", "./apple-touch-icon.png",
+  "./ic/assistant.webp", "./ic/bills.webp", "./ic/buy.webp", "./ic/c-food.webp", "./ic/c-fun.webp", "./ic/c-health.webp", "./ic/c-home.webp", "./ic/c-other.webp", "./ic/c-shop.webp", "./ic/c-transport.webp", "./ic/capital.webp", "./ic/days.webp", "./ic/debts.webp", "./ic/deposit.webp", "./ic/incomes.webp", "./ic/settings.webp", "./ic/stash.webp", "./ic/stats.webp", "./ic/summary.webp"];
 self.addEventListener("install", e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)).then(() => self.skipWaiting()));
 });
