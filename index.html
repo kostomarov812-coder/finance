@@ -632,7 +632,8 @@
     .hbar-track > div { height: 100%; background: var(--blue); border-radius: var(--radius-full); transition: width .5s cubic-bezier(.22, 1, .36, 1); }
     .hbar-sub { font-size: 12px; color: var(--muted); margin-top: 5px; }
 
-    .card-title-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+    .card-title-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; gap: 10px; }
+    .card-title-row .linkbtn { white-space: nowrap; }
     .card-title-row .card-title { margin-bottom: 0; }
     .linkbtn { background: none; border: none; color: var(--muted); font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit; padding: 4px 0; }
     .btn-row { display: flex; gap: 8px; margin-top: 14px; }
@@ -1099,7 +1100,8 @@
         s.bills = (Array.isArray(raw.bills) ? raw.bills : []).map(b => ({
           id: String(b.id || uid()), name: String(b.name || "Платёж"), amount: Math.max(0, num(b.amount)),
           day: Math.min(31, Math.max(1, Math.round(num(b.day)) || 1)), note: String(b.note || ""),
-          cat: CATEGORIES[b.cat] ? b.cat : "home", from: /^\d{4}-\d{2}$/.test(b.from || "") ? b.from : "2000-01"
+          cat: CATEGORIES[b.cat] ? b.cat : "home", from: /^\d{4}-\d{2}$/.test(b.from || "") ? b.from : "2000-01",
+          left: b.left === null || b.left === undefined || b.left === "" ? null : Math.max(0, num(b.left)), leftTs: num(b.leftTs)
         })).filter(b => b.amount > 0);
         Object.keys(raw.billPaid || {}).forEach(k => {
           const v = raw.billPaid[k];
@@ -1250,10 +1252,31 @@
 
     // Регулярные платежи месяца: { ...bill, eff (день в этом месяце), paid: {date, ts, amount} | null }
     function billsFor(y, m) {
-      const key = monthKey(y, m), idx = monthIdx(y, m), D = dim(y, m);
-      return state.bills
-        .filter(b => idx >= keyIdx(b.from))
-        .map(b => Object.assign({}, b, { eff: Math.min(b.day, D), paid: state.billPaid[key + ":" + b.id] || null }));
+      const key = monthKey(y, m), idx = monthIdx(y, m), D = dim(y, m), n = now(), cur = monthIdx(n.y, n.m), curKey = monthKey(n.y, n.m);
+      const out = [];
+      state.bills.forEach(b => {
+        if (idx < keyIdx(b.from)) return;
+        const paid = state.billPaid[key + ":" + b.id] || null;
+        let amount = b.amount;
+        if (isCredit(b)) {
+          // Кредит/рассрочка: платим, пока есть остаток. Будущие месяцы — по прогнозу остатка.
+          let left = creditLeft(b);
+          if (idx > cur) left -= (state.billPaid[curKey + ":" + b.id] ? 0 : Math.min(b.amount, left)) + b.amount * (idx - cur - 1);
+          if (!paid) {
+            if (left <= 0.005) return;
+            amount = Math.min(b.amount, left);
+          }
+        }
+        out.push(Object.assign({}, b, { amount, eff: Math.min(b.day, D), paid }));
+      });
+      return out;
+    }
+    const isCredit = b => b.left !== null && b.left !== undefined;
+    // Остаток кредита = что было указано минус оплаты после этого
+    function creditLeft(b) {
+      if (!isCredit(b)) return 0;
+      const paid = sum(Object.keys(state.billPaid).filter(k => k.endsWith(":" + b.id) && num(state.billPaid[k].ts) > b.leftTs), k => state.billPaid[k].amount);
+      return Math.max(0, b.left - paid);
     }
 
     function paymentsIn(key) {
@@ -1416,6 +1439,8 @@
       const passiveIncs = incomesFor(n.y, n.m).filter(i => i.passive && i.monthly);
       const passiveIncome = sum(passiveIncs, i => i.net);
       const passive = stashMonthly + passiveIncome + sum(assets, a => a.monthly);
+      const credits = state.bills.filter(isCredit).map(b => ({ b, left: creditLeft(b) })).filter(x => x.left > 0.005);
+      const creditsLeft = sum(credits, x => x.left);
       const billsMonthly = sum(billsFor(n.y, n.m), b => b.amount);
       const debtsLeft = totalDebtsRemaining();
       // Исполнительные листы: что приставы удерживают с доходов этого месяца (со всех, а не только «после ввода баланса»)
@@ -1427,10 +1452,10 @@
       const debtMonthly = ipMonthly + plainMonthly;
       const drain = billsMonthly + debtMonthly + sum(liabs, a => a.monthly);
       const cash = Math.max(0, c.cashNow || 0);
-      const worth = cash + st.total + sum(assets, a => a.value) - debtsLeft - sum(liabs, a => a.value);
+      const worth = cash + st.total + sum(assets, a => a.value) - debtsLeft - creditsLeft - sum(liabs, a => a.value);
       const exp = monthlyExpenses();
       const share = exp.value > 0 ? passive / exp.value * 100 : 0;
-      return { c, st, rate, assets, liabs, stashMonthly, passive, billsMonthly, debtsLeft, debtMonthly, drain, cash, worth, exp,
+      return { c, st, rate, assets, liabs, stashMonthly, passive, credits, creditsLeft, billsMonthly, debtsLeft, debtMonthly, drain, cash, worth, exp,
         ipMonthly, ipNominal, ipLeft, ipTotal, plainLeft, plainMonthly, passiveIncs, passiveIncome,
         ipShare: grossM > 0 ? Math.round(ipMonthly / grossM * 100) : 0,
         incNet: sum(allIncs.filter(i => i.monthly), i => i.net),
@@ -2255,7 +2280,10 @@
       el.innerHTML = list.map(bill => {
         const a = allIds[bill.id], counted = inMonth[bill.id];
         let status, actions = "";
-        if (!a) status = '<span class="badge">с ' + monthLabel(...keyParts(bill.from)).toLowerCase() + "</span>";
+        const cl = isCredit(bill) ? creditLeft(bill) : 0, done = isCredit(bill) && cl <= 0.005;
+        const afterEnd = !a && isCredit(bill) && monthIdx(c.y, c.m) >= keyIdx(bill.from);
+        if (afterEnd) status = '<span class="badge green">' + (done ? "кредит выплачен" : "будет выплачен") + "</span>";
+        else if (!a) status = '<span class="badge">с ' + monthLabel(...keyParts(bill.from)).toLowerCase() + "</span>";
         else if (a.paid) {
           const pd = a.paid.date.split("-").map(Number);
           status = '<span class="badge green">оплачено ' + pd[2] + " " + MONTHS_GEN[pd[1] - 1].slice(0, 3) + (counted ? "" : " · до баланса") + "</span>";
@@ -2266,10 +2294,10 @@
           status = '<span class="badge ' + (late ? "red" : soon ? "orange" : "") + '">' + (late ? "не оплачен · " + a.eff + "-го" : a.eff === c.t ? "сегодня" : "к " + a.eff + "-му") + "</span>";
           actions = '<button class="btn small green" data-action="bill-pay" data-id="' + bill.id + '">Оплатить</button>';
         }
-        const shown = a && a.paid ? a.paid.amount : bill.amount;
+        const shown = a ? (a.paid ? a.paid.amount : a.amount) : afterEnd ? 0 : bill.amount;
         return '<div class="item col' + (a ? "" : " dim") + (a && a.paid ? " dim" : "") + '">' +
           '<div class="item-info"><div class="item-name">' + esc(bill.name) + '</div>' +
-          '<div class="item-meta">' + status + '<span class="' + catClass(bill.cat) + '">' + catLabel(bill.cat) + "</span><span>" + bill.day + "-е число</span></div></div>" +
+          '<div class="item-meta">' + status + '<span class="' + catClass(bill.cat) + '">' + catLabel(bill.cat) + "</span><span>" + bill.day + "-е число" + (isCredit(bill) && !done ? " · осталось " + fmt(cl) : "") + "</span></div></div>" +
           '<div class="item-amount ' + (a && a.paid ? "" : "red") + '">' + fmt(shown) + "</div>" +
           '<div class="item-actions">' + actions +
             '<button class="btn small secondary" data-action="edit-bill" data-id="' + bill.id + '">✎</button>' +
@@ -2518,27 +2546,46 @@
         '<div class="item"' + (tab ? ' data-action="goto-tab" data-tab="' + tab + '" style="cursor:pointer"' : "") + '><div class="item-info"><div class="item-name">' + name + "</div>" +
         '<div class="item-meta"><span class="badge">авто</span><span>' + sub + "</span></div></div>" +
         '<div class="item-amount ' + cls + '">' + amt + "</div></div>";
-      const manual = (a, sign, cls) =>
+      // Имущество: только стоимость. Деньги в месяц живут в «Доходах» и «Платежах».
+      const thing = a =>
         '<div class="item col"><div class="item-info"><div class="item-name">' + esc(a.name) + "</div>" +
         '<div class="item-meta"><span>' + (a.value > 0 ? (a.kind === "asset" ? "стоимость " : "остаток ") + fmt(a.value) : "без оценки") + (a.note ? " · " + esc(a.note) : "") + "</span></div></div>" +
-        '<div class="item-amount ' + (a.monthly > 0 ? cls : "") + '">' + (a.monthly > 0 ? sign + fmt(a.monthly) + "/мес" : "0 ₽/мес") + "</div>" +
+        '<div class="item-amount">' + (a.value > 0 ? fmt(a.value) : "—") + "</div>" +
         '<div class="item-actions"><button class="btn small secondary" data-action="edit-asset" data-id="' + a.id + '">✎</button>' +
         '<button class="btn small danger" data-action="del-asset" data-id="' + a.id + '">×</button></div></div>';
 
-      h += '<div class="card"><div class="card-title-row"><div class="card-title">Активы · кладут деньги в карман</div><button type="button" class="linkbtn" style="color:var(--blue-text)" data-action="add-asset" data-kind="asset">+ актив</button></div>' +
-        auto("Копилка", "накоплено " + fmt(cap.st.total), (cap.stashMonthly >= 0.5 ? "+" : "") + fmt(cap.stashMonthly) + "/мес", cap.stashMonthly >= 0.5 ? "green" : "", "stash") +
-        cap.passiveIncs.map(i => auto(esc(i.name), "из «Доходов» · " + i.eff + "-го числа", "+" + fmt(i.net) + "/мес", "green", "incomes")).join("") +
-        (cap.cash > 0 ? auto("Деньги на руках", fmt(cap.cash) + " · лежат без дела", "0 ₽/мес", "", "summary") : "") +
-        cap.assets.map(a => manual(a, "+", "green")).join("") +
-        '<p class="hint">Актив — то, что приносит деньги без вашей работы. Если деньги с него реально приходят (аренда квартиры, проценты на карту) — заведите их в «Доходах» с галочкой «Пассивный доход»: тогда они попадут и в бюджет, и сюда. Вручную здесь — только то, чего нет в доходах, например стоимость квартиры.</p></div>';
+      // Старые записи, внесённые только сюда (в бюджет не попадали) — предлагаем перенести
+      const legacy = state.assets.filter(a => a.monthly > 0.005);
+      if (legacy.length) {
+        h += '<div class="card"><div class="card-title">Перенесите в бюджет</div>' +
+          '<div class="alert warn" style="margin:0 0 6px">Раньше эти суммы вносились только в «Капитал» и не учитывались в дневной норме. Теперь каждая сумма живёт в одном месте — перенесите их или уберите, если они уже есть в «Платежах» / «Доходах».</div>' +
+          legacy.map(a => {
+            const liab = a.kind === "liab";
+            return '<div class="item col"><div class="item-info"><div class="item-name">' + esc(a.name) + "</div>" +
+              '<div class="item-meta"><span>' + (liab ? "забирает" : "приносит") + " " + fmt(a.monthly) + " в месяц" + (a.value > 0 ? " · " + (liab ? "остаток " : "стоимость ") + fmt(a.value) : "") + "</span></div></div>" +
+              '<div class="item-actions">' +
+                '<button class="btn small green" data-action="asset-move" data-id="' + a.id + '">' + (liab ? "В платежи" : "В доходы") + "</button>" +
+                '<button class="btn small secondary" data-action="asset-drop" data-id="' + a.id + '">Уже есть</button>' +
+              "</div></div>";
+          }).join("") + "</div>";
+      }
 
-      h += '<div class="card"><div class="card-title-row"><div class="card-title">Пассивы · вынимают деньги</div><button type="button" class="linkbtn" style="color:var(--blue-text)" data-action="add-asset" data-kind="liab">+ пассив</button></div>' +
+      const owned = cap.assets.filter(a => !(a.monthly > 0.005)), oldLiabs = cap.liabs.filter(a => !(a.monthly > 0.005));
+      h += '<div class="card"><div class="card-title-row"><div class="card-title">Активы · кладут деньги в карман</div><button type="button" class="linkbtn" style="color:var(--blue-text)" data-action="add-asset" data-kind="asset">+ имущество</button></div>' +
+        auto("Копилка", "накоплено " + fmt(cap.st.total), (cap.stashMonthly >= 0.5 ? "+" : "") + fmt(cap.stashMonthly) + "/мес", cap.stashMonthly >= 0.5 ? "green" : "", "stash") +
+        (cap.cash > 0 ? auto("Деньги на руках", fmt(cap.cash) + " · лежат без дела", "0 ₽/мес", "", "summary") : "") +
+        cap.passiveIncs.map(i => auto(esc(i.name), "пассивный доход · из «Доходов»", "+" + fmt(i.net) + "/мес", "green", "incomes")).join("") +
+        owned.map(thing).join("") +
+        '<p class="hint">Доход от актива — аренда, проценты, дивиденды — добавьте в «Доходы» с типом «Пассивный», сюда он попадёт сам. Здесь вносится только стоимость имущества: квартира, машина, гараж.</p></div>';
+
+      h += '<div class="card"><div class="card-title-row"><div class="card-title">Пассивы · вынимают деньги</div><span><button type="button" class="linkbtn" style="color:var(--blue-text);margin-right:12px" data-action="goto-tab" data-tab="bills">+ платёж</button><button type="button" class="linkbtn" style="color:var(--blue-text)" data-action="goto-tab" data-tab="debts">+ долг</button></span></div>' +
         (cap.ipLeft > 0 || cap.ipMonthly > 0 ? auto("Исполнительные листы", "осталось " + fmt(cap.ipLeft) + (cap.ipShare ? " · " + cap.ipShare + "% дохода" : ""), "−" + fmt(cap.ipMonthly) + "/мес", cap.ipMonthly > 0 ? "red" : "", "debts") : "") +
         (cap.plainLeft > 0 || cap.plainMonthly > 0 ? auto("Долги", "осталось " + fmt(cap.plainLeft) + " · платёж этого месяца", "−" + fmt(cap.plainMonthly) + "/мес", cap.plainMonthly > 0 ? "red" : "", "debts") : "") +
-        (cap.billsMonthly > 0 ? auto("Регулярные платежи", "квартплата, связь, подписки", "−" + fmt(cap.billsMonthly) + "/мес", "red", "bills") : "") +
-        cap.liabs.map(a => manual(a, "−", "red")).join("") +
-        (cap.debtsLeft > 0 || cap.debtMonthly > 0 || cap.billsMonthly > 0 || cap.liabs.length ? "" : '<div class="empty" style="padding:14px">Пассивов нет</div>') +
-        '<p class="hint">Пассив — то, что каждый месяц забирает деньги: кредит, рассрочка, машина, подписки. В бюджет идут только «Платежи» и «Долги»; этот список — для общей картины.</p></div>';
+        cap.credits.map(x => auto(esc(x.b.name), "кредит · осталось " + fmt(x.left), "−" + fmt(Math.min(x.b.amount, x.left)) + "/мес", "red", "bills")).join("") +
+        (() => { const other = cap.billsMonthly - sum(cap.credits, x => Math.min(x.b.amount, x.left)); return other > 0.5 ? auto("Регулярные платежи", "квартплата, связь, подписки", "−" + fmt(other) + "/мес", "red", "bills") : ""; })() +
+        oldLiabs.map(thing).join("") +
+        (cap.debtsLeft > 0 || cap.debtMonthly > 0 || cap.billsMonthly > 0 || oldLiabs.length ? "" : '<div class="empty" style="padding:14px">Пассивов нет</div>') +
+        '<p class="hint">Всё здесь берётся из «Платежей» и «Долгов» — второй раз вносить не нужно. Кредит или рассрочку заведите в «Платежах» и укажите остаток: платёж будет откладываться из бюджета, а остаток — уменьшаться с каждой оплатой.</p></div>';
 
       h += '<div class="card"><div class="card-title">Чистая стоимость</div>' +
         '<div class="big-num ' + (cap.worth >= 0 ? "green" : "red") + '" style="font-size:34px">' + fmt(cap.worth) + "</div>" +
@@ -2642,7 +2689,7 @@
       const hideFab = current === "deposit" || current === "settings" || current === "assistant" || current === "buy";
       fab.classList.toggle("hide", hideFab);
       if (!hideFab) {
-        const labels = { hub: "Трата", summary: "Трата", incomes: "Доход", debts: "Долг", days: "Трата", bills: "Платёж", stats: "Трата", stash: "В копилку", capital: "Актив" };
+        const labels = { hub: "Трата", summary: "Трата", incomes: "Доход", debts: "Долг", days: "Трата", bills: "Платёж", stats: "Трата", stash: "В копилку", capital: "Имущество" };
         fabLabel.textContent = labels[current] || "Добавить";
       }
       if (current === "hub") renderHub(c);
@@ -3073,7 +3120,7 @@
       return o;
     }
 
-    function showIncome(edit) {
+    function showIncome(edit, extra) {
       const inc = edit || { name: "", amount: "", day: 1, note: "", monthly: true };
       let dayOpts = "";
       for (let i = 1; i <= 31; i++) dayOpts += '<option value="' + i + '"' + (Number(inc.day) === i ? " selected" : "") + ">" + i + "-е</option>";
@@ -3088,7 +3135,7 @@
           '<span><b>Пассивный доход</b><br><span class="hint" style="margin:0">приходит без вашей работы: сдача квартиры, проценты, дивиденды. Попадёт в «Капитал» и счётчик свободы</span></span></label>' +
         '<div class="form-row"><div class="field-label">Удержание по ИП, %</div><input id="m-hold" type="number" inputmode="decimal" placeholder="0" value="' + (inc.withhold || "") + '" /></div>' +
         '<div class="form-row"><input id="m-note" placeholder="Заметка" value="' + esc(inc.note || "") + '" /></div>',
-        "income", { id: edit ? edit.id : null });
+        "income", Object.assign({ id: edit && edit.id ? edit.id : null }, extra || {}));
     }
 
     function showDebt(edit) {
@@ -3110,8 +3157,9 @@
         "debt", { id: edit ? edit.id : null });
     }
 
-    function showBill(edit) {
+    function showBill(edit, extra) {
       const b = edit || { name: "", amount: "", day: now().d, cat: "home", note: "" };
+      const leftShown = isCredit(b) ? Math.round(b.leftTs ? creditLeft(b) : b.left) : "";
       let dayOpts = "";
       for (let i = 1; i <= 31; i++) dayOpts += '<option value="' + i + '"' + (Number(b.day) === i ? " selected" : "") + ">" + i + "-е</option>";
       openModal(edit ? "Редактировать платёж" : "Новый регулярный платёж",
@@ -3120,8 +3168,9 @@
         '<div class="form-row"><div class="field-label">Платить до</div><select id="m-day">' + dayOpts + "</select></div>" +
         '<div class="form-row"><div class="field-label">Категория</div><select id="m-cat">' +
           CAT_IDS.map(id => '<option value="' + id + '"' + (id === b.cat ? " selected" : "") + ">" + catLabel(id) + "</option>").join("") + "</select></div>" +
+        '<div class="form-row"><div class="field-label">Кредит или рассрочка? Осталось выплатить всего, ₽</div><input id="m-left" type="number" inputmode="decimal" placeholder="Пусто — платёж без конца" value="' + leftShown + '" /></div>' +
         '<div class="form-row"><input id="m-note" placeholder="Заметка (лицевой счёт, как платить…)" value="' + esc(b.note || "") + '" /></div>',
-        "bill", { id: edit ? edit.id : null });
+        "bill", Object.assign({ id: edit && edit.id ? edit.id : null, leftShown }, extra || {}));
     }
 
     function showStashOp(kind) {
@@ -3154,14 +3203,11 @@
     function showAsset(edit, kind) {
       const a = edit || { name: "", kind: kind === "liab" ? "liab" : "asset", value: "", monthly: "", note: "" };
       const liab = a.kind === "liab";
-      openModal(edit ? "Изменить" : (liab ? "Новый пассив" : "Новый актив"),
-        '<div class="form-row"><div class="field-label">Что это</div><select id="m-kind">' +
-          '<option value="asset"' + (liab ? "" : " selected") + '>Актив — приносит деньги</option>' +
-          '<option value="liab"' + (liab ? " selected" : "") + '>Пассив — забирает деньги</option></select></div>' +
-        '<div class="form-row"><input id="m-name" placeholder="Название: вклад, квартира, кредит…" value="' + esc(a.name) + '" /></div>' +
-        '<div class="form-row"><div class="field-label">Сколько в месяц приносит или забирает, ₽ — если этого нет в «Доходах» и «Платежах»</div><input id="m-monthly" type="number" inputmode="decimal" placeholder="0" value="' + (a.monthly || "") + '" /></div>' +
-        '<div class="form-row"><div class="field-label">Стоимость или остаток долга, ₽ (необязательно)</div><input id="m-value" type="number" inputmode="decimal" placeholder="0" value="' + (a.value || "") + '" /></div>' +
-        '<div class="form-row"><input id="m-note" placeholder="Заметка" value="' + esc(a.note || "") + '" /></div>',
+      openModal(edit ? "Изменить" : "Имущество",
+        '<div class="form-row"><input id="m-name" placeholder="' + (liab ? "Название" : "Квартира, машина, гараж…") + '" value="' + esc(a.name) + '" /></div>' +
+        '<div class="form-row"><div class="field-label">' + (liab ? "Остаток, ₽" : "Сколько стоит, ₽") + '</div><input id="m-value" type="number" inputmode="decimal" placeholder="0" value="' + (a.value || "") + '" /></div>' +
+        '<div class="form-row"><input id="m-note" placeholder="Заметка" value="' + esc(a.note || "") + '" /></div>' +
+        '<p class="hint" style="margin-top:0">Если имущество приносит деньги (сдаёте квартиру) — добавьте это в «Доходы» с типом «Пассивный». Если забирает (кредит за машину) — в «Платежи» с остатком.</p>',
         "asset", { id: edit ? edit.id : null });
     }
 
@@ -3226,6 +3272,7 @@
         const withhold = Math.min(100, Math.max(0, num($("m-hold").value))), passive = $("m-passive").checked;
         if (!name || amount <= 0) return toast("Укажите название и сумму");
         const vk = monthKey(view.y, view.m);
+        if (ctx.fromAsset) { const a = state.assets.find(x => x.id === ctx.fromAsset); if (a) { a.monthly = 0; if (!(a.value > 0)) state.assets = state.assets.filter(x => x !== a); } }
         if (ctx.id) {
           const inc = state.incomes.find(x => x.id === ctx.id);
           if (inc) {
@@ -3287,11 +3334,17 @@
         const name = $("m-name").value.trim(), amount = num($("m-amount").value), day = num($("m-day").value) || 1;
         const cat = CATEGORIES[$("m-cat").value] ? $("m-cat").value : "home", note = $("m-note").value.trim();
         if (!name || amount <= 0) return toast("Укажите название и сумму");
+        const lraw = $("m-left").value.trim();
+        if (lraw !== "" && !(num(lraw) >= 0)) return toast("Остаток — числом");
+        // Остаток меняем, только если его поправили руками; иначе он сам уменьшается с оплатами
+        const leftPatch = lraw === "" ? { left: null, leftTs: 0 }
+          : (String(ctx.leftShown) !== "" && Math.abs(num(lraw) - num(ctx.leftShown)) < 0.5) ? {} : { left: num(lraw), leftTs: Date.now() };
+        if (ctx.fromAsset) state.assets = state.assets.filter(x => x.id !== ctx.fromAsset);
         if (ctx.id) {
           const b = state.bills.find(x => x.id === ctx.id);
-          if (b) Object.assign(b, { name, amount, day, cat, note });
+          if (b) Object.assign(b, { name, amount, day, cat, note }, leftPatch);
         } else {
-          state.bills.push({ id: uid(), name, amount, day, cat, note, from: monthKey(view.y, view.m) });
+          state.bills.push(Object.assign({ id: uid(), name, amount, day, cat, note, from: monthKey(view.y, view.m), left: null, leftTs: 0 }, leftPatch));
         }
       } else if (mode === "billpay") {
         const amount = num($("m-amount").value), date = $("m-date").value;
@@ -3316,14 +3369,13 @@
       } else if (mode === "expense") {
         state.stash.expense = Math.max(0, num($("m-amount").value));
       } else if (mode === "asset") {
-        const name = $("m-name").value.trim(), kind = $("m-kind").value === "liab" ? "liab" : "asset";
-        const value = Math.max(0, num($("m-value").value)), monthly = Math.max(0, num($("m-monthly").value)), note = $("m-note").value.trim();
+        const name = $("m-name").value.trim(), value = Math.max(0, num($("m-value").value)), note = $("m-note").value.trim();
         if (!name) return toast("Укажите название");
         if (ctx.id) {
           const a = state.assets.find(x => x.id === ctx.id);
-          if (a) Object.assign(a, { name, kind, value, monthly, note });
+          if (a) Object.assign(a, { name, value, note });
         } else {
-          state.assets.push({ id: uid(), name, kind, value, monthly, note });
+          state.assets.push({ id: uid(), name, kind: "asset", value, monthly: 0, note });
         }
       }
       save(); closeModal(); render();
@@ -3551,6 +3603,19 @@
       else if (a === "add-asset") showAsset(null, t.dataset.kind);
       else if (a === "edit-asset") { const x = state.assets.find(v => v.id === id); if (x) showAsset(x); }
       else if (a === "del-asset") removeWithUndo("assets", id, "Пункт");
+      else if (a === "asset-move") {
+        const x = state.assets.find(v => v.id === id);
+        if (!x) return;
+        if (x.kind === "liab") showBill({ name: x.name, amount: x.monthly, day: now().d, cat: "home", note: x.note, left: x.value > 0 ? x.value : null, leftTs: 0 }, { fromAsset: x.id, leftShown: "" });
+        else showIncome({ name: x.name, amount: x.monthly, day: 1, note: x.note, monthly: true, passive: true }, { fromAsset: x.id });
+      }
+      else if (a === "asset-drop") {
+        const x = state.assets.find(v => v.id === id);
+        if (!x) return;
+        const was = x.monthly;
+        if (x.kind === "asset" && x.value > 0) { x.monthly = 0; save(); render(); toast("Доход убран, имущество осталось", "Отменить", () => { x.monthly = was; save(); render(); }); }
+        else removeWithUndo("assets", id, "Пункт");
+      }
       else if (a === "tip-next") { state.tipShift = (state.tipShift + 1) % 1000; save(); render(); }
       else if (a === "buy-spend") {
         const amount = num($("buyAmount").value), name = $("buyName").value.trim() || "Покупка";
