@@ -2217,7 +2217,11 @@
         if (unsetStart && state.incomes.length === 0 && state.debts.length === 0 && state.bills.length === 0) {
           html += '<div class="alert info"><b>С чего начать:</b> укажите баланс в «Настройках», добавьте доходы и долги.<br><button class="btn small" data-action="goto-tab" data-tab="settings">Открыть настройки</button></div>';
         } else if (unsetStart) {
-          html += '<div class="alert warn">Стартовый баланс не задан — считаю 0 ₽.<br><button class="btn small" data-action="goto-tab" data-tab="settings">Указать баланс</button></div>';
+          html += '<div class="alert warn">Сколько у вас денег сейчас, приложение ещё не знает — считаю от 0 ₽.<br><button class="btn small" data-action="sync-bal">Указать, сколько денег</button></div>';
+        }
+        if (c.cashNow < -0.5) {
+          html += '<div class="alert bad"><b>На руках по расчёту ' + fmt(c.cashNow) + '</b> — так не бывает. Значит, приложение начало считать не от той суммы или какой-то доход не записан. ' +
+            'Посмотрите в банке, сколько у вас сейчас денег, и впишите — дальше всё посчитается от неё.<br><button class="btn small" data-action="sync-bal">Сверить с банком</button></div>';
         }
         if (c.budget < 0) {
           html += '<div class="alert bad">Бюджет месяца отрицательный: не хватает <b>' + fmt(-c.budget) + '</b>.</div>';
@@ -2254,6 +2258,7 @@
             "</div>" +
           "</div>" +
           '<div class="sub-text" style="margin-top:10px">Сегодня потрачено <b style="color:var(--text)">' + fmt(c.spentToday) + "</b> · осталось по норме <b style=\"color:var(--text)\">" + fmt(Math.max(0, allow - c.spentToday)) + "</b></div>" +
+          '<button type="button" class="linkbtn" style="color:var(--blue-text);margin-top:6px" data-action="sync-bal">Сверить с банком — у меня на руках ' + fmt(c.cashNow) + "?</button>" +
           '<div class="stat-rows">' +
             '<div class="stat-row"><span class="k">Потрачено в месяце</span><span class="v">' + fmt(c.spentMonth) + "</span></div>" +
             '<div class="stat-row"><span class="k">Осталось на месяц</span><span class="v">' + fmt(Math.max(0, c.budget - c.spentMonth)) + "</span></div>" +
@@ -3225,8 +3230,9 @@
         s: left > 0 ? open + " " + plural(open, "долг", "долга", "долгов") + (cap0.ipLeft > 0 ? " · исполнительные листы " + fmt(cap0.ipLeft) : "") : (state.debts.length ? "все погашены" : "долгов нет") };
 
       // 4. Умная подсказка (считается по вашим данным, без интернета)
-      const ins = hubInsight(c);
-      const insHtml = ins ? '<button class="insight" data-action="goto-tab" data-tab="' + ins.tab + '"><span class="ins-ic"><svg viewBox="0 0 24 24"><path d="M11 3l1.9 5.1L18 10l-5.1 1.9L11 17l-1.9-5.1L4 10l5.1-1.9z"/><path d="M18.5 14.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z"/></svg></span>' +
+      let ins = hubInsight(c);
+      if (c.kind === "current" && c.cashNow < -0.5) ins = { text: "На руках по расчёту " + fmt(c.cashNow) + " — так не бывает. Нажмите и впишите, сколько денег сейчас.", action: "sync-bal" };
+      const insHtml = ins ? '<button class="insight" ' + (ins.action ? 'data-action="' + ins.action + '"' : 'data-action="goto-tab" data-tab="' + ins.tab + '"') + '><span class="ins-ic"><svg viewBox="0 0 24 24"><path d="M11 3l1.9 5.1L18 10l-5.1 1.9L11 17l-1.9-5.1L4 10l5.1-1.9z"/><path d="M18.5 14.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z"/></svg></span>' +
         '<span class="ins-body"><span class="ins-k" style="display:block">Умная подсказка</span><span class="ins-t" style="display:block">' + ins.text + "</span></span>" +
         '<span class="ins-side"><svg viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z"/><path d="M8.5 12l2.5 2.5 4.5-5"/></svg></span></button>' : "";
 
@@ -4063,6 +4069,14 @@
         }
       }
       else if (mode === "import") { if (!saveImport(ctx)) return; }
+      else if (mode === "syncbal") {
+        const raw = $("m-amount").value.trim();
+        if (raw === "" || !isFinite(num(raw))) return toast("Впишите сумму");
+        const n = now(), key = monthKey(n.y, n.m), ms = state.months[key] = state.months[key] || {};
+        ms.start = num(raw); ms.startDay = n.d; ms.startAfter = true; ms.startTs = Date.now();
+        if (view.y !== n.y || view.m !== n.m) { view.y = n.y; view.m = n.m; }
+        toast("Готово: на руках " + fmt(num(raw)) + ", считаю от этой суммы");
+      }
       else if (mode === "increcv") {
         const v = num($("m-amount").value);
         if (!(v > 0)) return toast("Укажите сумму");
@@ -4292,13 +4306,21 @@
         setPayPct(v); save(); render();
         toast(v ? "С каждого дохода — " + v + "% в копилку" : "Откладывание выключено");
       }
+      else if (a === "sync-bal") {
+        const n = now(), c = calcMonth(n.y, n.m), st = stashInfo();
+        openModal("Сверить с банком",
+          '<div class="form-row"><div class="field-label">Сколько у вас денег прямо сейчас, ₽</div><input id="m-amount" type="number" inputmode="decimal" placeholder="Например, 12 500" value="' + (c.cashNow > 0.5 ? Math.round(c.cashNow) : "") + '" /></div>' +
+          '<p class="hint">Сложите все карты и наличные' + (st.total > 0.5 ? ", <b>кроме копилки</b> (в копилке " + fmt(st.total) + ")" : "") + '. Всё, что было до этой минуты — траты, доходы, оплаты, — будет считаться уже внутри этой суммы, ничего не задвоится. Дальше приложение считает от неё.</p>' +
+          (c.cashNow < -0.5 || c.cashNow > 0.5 ? '<p class="hint">Сейчас по расчёту: ' + fmt(c.cashNow) + ".</p>" : ""),
+          "syncbal", {}, { saveLabel: "Сохранить" });
+      }
       else if (a === "spend-to-bill") {
         const k = t.dataset.key, list = state.spends[k] || [], sp = list.find(x => x.id === id);
         if (!sp) return;
         const mk = k.slice(0, 7), day = Number(k.slice(8));
         const bill = { id: uid(), name: sp.name, amount: sp.amount, day, cat: sp.cat === "other" ? "home" : sp.cat, note: "", from: mk, left: null, leftTs: 0 };
         state.bills.push(bill);
-        state.billPaid[mk + ":" + bill.id] = { date: k, amount: sp.amount, ts: Date.now() };
+        state.billPaid[mk + ":" + bill.id] = { date: k, amount: sp.amount, ts: num(sp.ts) || Date.now() };
         state.spends[k] = list.filter(x => x.id !== id);
         if (!state.spends[k].length) delete state.spends[k];
         save(); closeModal(); render();
