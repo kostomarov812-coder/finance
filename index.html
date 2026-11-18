@@ -915,6 +915,7 @@
 
     <!-- ДОХОДЫ -->
     <div class="panel" id="panel-incomes">
+      <div id="incSummary"></div>
       <div class="section-head">
         <h2>Мои доходы</h2>
         <button class="btn small" id="btnAddIncome">+ добавить</button>
@@ -2403,7 +2404,25 @@
     }
 
     function renderIncomes(c) {
-      const el = $("incomesList");
+      const el = $("incomesList"), sumEl = $("incSummary");
+      // Итог месяца: что уже пришло на руки и что ещё ждать
+      const inScope = c.incs.filter(i => i.net > 0.005 || i.amount > 0.005);
+      if (sumEl) {
+        if (!inScope.length || c.kind === "future") sumEl.innerHTML = "";
+        else {
+          const got = inScope.filter(i => i.received), wait = inScope.filter(i => !i.received);
+          const held = sum(inScope, i => i.held);
+          const line = (i, cls) => '<div class="save-name"><span>' + esc(i.name) + ' <span style="color:var(--muted)">· ' + i.eff + "-е" + (i.held > 0.5 ? " · удержано " + fmt(i.held) : "") + "</span></span><b" + (cls ? ' class="' + cls + '"' : "") + ">" + fmt(i.net) + "</b></div>";
+          sumEl.innerHTML = '<div class="card hero-card"><div class="card-title">' + MONTHS[c.m] + " · доходы на руки</div>" +
+            '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:6px">' +
+              '<div><div class="sub-text" style="margin:0">Пришло</div><div class="big-num green" style="font-size:30px">' + fmt(sum(got, i => i.net)) + "</div></div>" +
+              '<div><div class="sub-text" style="margin:0">Ещё придёт</div><div class="big-num" style="font-size:30px">' + fmt(sum(wait, i => i.net)) + "</div></div></div>" +
+            (got.length ? '<div class="modal-sub" style="margin-top:10px">Пришло</div>' + got.map(i => line(i, "green")).join("") : "") +
+            (wait.length ? '<div class="modal-sub" style="margin-top:10px">Ожидается</div>' + wait.map(i => line(i, "")).join("") : "") +
+            (held > 0.5 ? '<p class="hint" style="margin-bottom:0">Удержания по исполнительным листам за месяц: ' + fmt(held) + " — в «пришло» их нет.</p>" : "") +
+            "</div>";
+        }
+      }
       if (!state.incomes.length) { el.innerHTML = '<div class="empty">Добавьте зарплату или другой доход</div>'; return; }
       const active = {};
       c.incs.forEach(i => { active[i.id] = i; });
