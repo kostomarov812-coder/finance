@@ -2386,9 +2386,9 @@
 
     function renderTodaySpends() {
       const el = $("todaySpends"), key = todayKey();
-      const list = state.spends[key] || [];
-      if (!list.length) { el.innerHTML = '<div class="empty" style="padding:14px">Трат сегодня пока нет</div>'; return; }
-      el.innerHTML = list.map(s =>
+      const list = state.spends[key] || [], paidH = paidRowsHtml(key);
+      if (!list.length) { el.innerHTML = (paidH || "") + (paidH ? "" : '<div class="empty" style="padding:14px">Трат сегодня пока нет</div>'); return; }
+      el.innerHTML = paidH + list.map(s =>
         '<div class="item">' + catIco(s.cat) +
           '<div class="item-info"><div class="item-name">' + esc(s.name) + '</div>' +
           '<div class="item-meta"><span class="' + catClass(s.cat) + '">' + catLabel(s.cat) + '</span></div></div>' +
@@ -2941,7 +2941,7 @@
         (() => { const other = cap.billsMonthly - sum(cap.credits, x => Math.min(x.b.amount, x.left)); return other > 0.5 ? auto("Регулярные платежи", "квартплата, связь, подписки", "−" + fmt(other) + "/мес", "red", "bills") : ""; })() +
         oldLiabs.map(thing).join("") +
         (cap.debtsLeft > 0 || cap.debtMonthly > 0 || cap.billsMonthly > 0 || oldLiabs.length ? "" : '<div class="empty" style="padding:14px">Пассивов нет</div>') +
-        '<p class="hint">Всё здесь берётся из «Платежей» и «Долгов» — второй раз вносить не нужно. Кредит или рассрочку заведите в «Платежах» и укажите остаток: платёж будет откладываться из бюджета, а остаток — уменьшаться с каждой оплатой.</p></div>';
+        '<p class="hint"><b>Капитал только показывает картину — сам ничего не вычитает.</b> Всё здесь берётся из «Платежей» и «Долгов» — второй раз вносить не нужно. Кредит или рассрочку заведите в «Платежах» и укажите остаток: платёж будет откладываться из бюджета, а остаток — уменьшаться с каждой оплатой.</p></div>';
 
       h += '<div class="card"><div class="card-title">Чистая стоимость</div>' +
         '<div class="big-num ' + (cap.worth >= 0 ? "green" : "red") + '" style="font-size:34px">' + fmt(cap.worth) + "</div>" +
@@ -3948,7 +3948,8 @@
             '<div class="item-amount red">' + fmt(s.amount) + '</div>' +
             '<div class="item-actions"><button class="btn small secondary" data-action="edit-spend" data-key="' + key + '" data-id="' + s.id + '">✎</button>' +
             '<button class="btn small danger" data-action="del-spend" data-key="' + key + '" data-id="' + s.id + '" data-reopen="' + day + '">×</button></div></div>').join("")
-        : '<div class="empty" style="padding:16px">Трат нет</div>';
+        : (paidRowsHtml(key) ? "" : '<div class="empty" style="padding:16px">Трат нет</div>');
+      body = paidRowsHtml(key) + body;
       body += '<div style="display:flex;gap:8px;margin-top:14px">' +
         '<button class="btn" style="flex:1" data-action="add-spend-day" data-day="' + day + '">+ трата за этот день</button></div>';
       openModal(day + " " + MONTHS_GEN[view.m], body, "day", { day }, { hideSave: true });
@@ -4018,7 +4019,9 @@
             (state.spends[newKey] = state.spends[newKey] || []).push({ id: s.id, name, amount, ts: s.ts, cat });
           }
         } else {
-          (state.spends[newKey] = state.spends[newKey] || []).push({ id: uid(), name, amount, ts: Date.now(), cat });
+          const nid = uid();
+          (state.spends[newKey] = state.spends[newKey] || []).push({ id: nid, name, amount, ts: Date.now(), cat });
+          ctx.added = { key: newKey, id: nid, text: name + " · " + fmt(amount) };
         }
       } else if (mode === "bill") {
         const name = $("m-name").value.trim(), amount = num($("m-amount").value), day = num($("m-day").value) || 1;
@@ -4085,6 +4088,7 @@
         toast("Доход отмечен: +" + fmt(v));
       }
       save(); closeModal(); render();
+      if (mode === "spend" && ctx.added) spendAddedToast(ctx.added.key, ctx.added.id, ctx.added.text);
     }
 
     function addSpend(key, name, amount, cat) {
@@ -4102,8 +4106,48 @@
       const key = todayKey(), id = addSpend(key, parsed.name, parsed.amount, parsed.cat);
       $("qSmart").value = "";
       save(); render();
-      toast(parsed.name + " · " + fmt(parsed.amount) + " · " + catLabel(parsed.cat), "Отменить", () => undoAdd(key, id));
+      spendAddedToast(key, id, parsed.name + " · " + fmt(parsed.amount) + " · " + catLabel(parsed.cat));
       $("qSmart").focus();
+    }
+
+    // Оплаченные в этот день платежи и долги — показываем рядом с тратами, чтобы все расходы были в одном списке
+    function paidRowsHtml(key) {
+      const mk = key.slice(0, 7), rows = [];
+      state.bills.forEach(b => { const pd = state.billPaid[mk + ":" + b.id]; if (pd && pd.date === key) rows.push({ name: b.name, amount: pd.amount, what: "платёж", tab: "bills" }); });
+      paymentsIn(mk).forEach(x => { if (x.p.date === key) rows.push({ name: x.d.name, amount: x.p.amount, what: "долг", tab: "debts" }); });
+      return rows.map(r => '<div class="item" style="opacity:.75">' + ico(r.tab, "ico-sm") +
+        '<div class="item-info"><div class="item-name">' + esc(r.name) + '</div><div class="item-meta"><span>' + r.what + " · уже вычтен, в норму дня не входит</span></div></div>" +
+        '<div class="item-amount red">' + fmt(r.amount) + "</div>" +
+        '<div class="item-actions"><button class="btn small secondary" data-action="goto-tab" data-tab="' + r.tab + '">›</button></div></div>').join("");
+    }
+    // Трата похожа на платёж? dup — этот платёж уже отмечен в тот же день; bill — платёж ещё не оплачен и сумма та же
+    function billMatch(key, amount) {
+      const y = Number(key.slice(0, 4)), m = Number(key.slice(5, 7)) - 1;
+      for (const b of billsFor(y, m)) {
+        if (b.paid && b.paid.date === key && Math.abs(b.paid.amount - amount) < 1) return { kind: "dup", b };
+      }
+      for (const b of billsFor(y, m)) {
+        if (!b.paid && Math.abs(b.amount - amount) <= Math.max(1, b.amount * 0.03)) return { kind: "bill", b };
+      }
+      for (const x of paymentsIn(key.slice(0, 7))) {
+        if (x.p.date === key && Math.abs(x.p.amount - amount) < 1) return { kind: "dupdebt", b: x.d };
+      }
+      return null;
+    }
+    // После добавления траты: если это похоже на платёж — предупреждаем, исправление в одно нажатие
+    function spendAddedToast(key, id, text) {
+      const sp = (state.spends[key] || []).find(x => x.id === id);
+      const mt = sp ? billMatch(key, sp.amount) : null;
+      if (!mt) return toast(text, "Отменить", () => undoAdd(key, id));
+      if (mt.kind === "dup" || mt.kind === "dupdebt")
+        return toast("Похоже, «" + mt.b.name + "» на " + fmt(sp.amount) + " уже отмечен оплаченным — трата задвоит расход", "Убрать трату", () => undoAdd(key, id));
+      toast("Это платёж «" + mt.b.name + "»? Лучше отметить его оплаченным — тогда не съест дневную норму", "Да, платёж", () => {
+        const list = state.spends[key] || [], s2 = list.find(x => x.id === id);
+        if (!s2) return;
+        state.billPaid[key.slice(0, 7) + ":" + mt.b.id] = { date: key, amount: s2.amount, ts: num(s2.ts) || Date.now() };
+        undoAdd(key, id);
+        toast("Записано как оплата «" + mt.b.name + "»");
+      });
     }
     function undoAdd(key, id) {
       const list = state.spends[key] || [];
