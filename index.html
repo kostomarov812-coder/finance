@@ -1210,7 +1210,7 @@
         version: 3,
         reserve: 0, mode: "all", months: {}, incomes: [], debts: [], spends: {},
         extraMonthly: 0, deposit: Object.assign({}, DP_DEFAULT), ui: Object.assign({}, UI_DEFAULT),
-        closed: {}, received: {}, chat: [],
+        closed: {}, received: {}, recvAmt: {}, chat: [],
         bills: [], billPaid: {}, catMap: {}, lastExport: 0, catsV: 2,
         // «Сначала заплати себе»: история процента [{from: "ГГГГ-ММ-ДД", pct}] — действует с даты from
         payself: { hist: [] },
@@ -1336,6 +1336,8 @@
         });
         Object.keys(raw.closed || {}).forEach(k => { if (raw.closed[k]) s.closed[k] = true; });
         Object.keys(raw.received || {}).forEach(k => { if (typeof raw.received[k] === "boolean") s.received[k] = raw.received[k]; });
+        s.recvAmt = {};
+        Object.keys(raw.recvAmt || {}).forEach(k => { const v = num(raw.recvAmt[k]); if (v > 0) s.recvAmt[k] = v; });
         s.chat = Array.isArray(raw.chat) ? raw.chat.filter(m => m && (m.role === "user" || m.role === "bot")).slice(-40) : [];
         s.bills = (Array.isArray(raw.bills) ? raw.bills : []).map(b => ({
           id: String(b.id || uid()), name: String(b.name || "Платёж"), amount: Math.max(0, num(b.amount)),
@@ -1499,7 +1501,10 @@
           const ov = state.received[key + ":" + i.id];
           let held = enf(0).held[key + ":" + i.id];
           if (held === undefined) held = (i.withhold > 0 && enf(0).active) ? i.amount * i.withhold / 100 : 0;
-          return Object.assign({}, i, { eff, auto, received: ov === undefined ? auto : ov, held, net: Math.max(0, i.amount - held) });
+          // Пришло не столько, сколько ждали (например, 11 500 вместо 15 000) — считаем по факту
+          const fact = state.recvAmt[key + ":" + i.id], amount = fact > 0 ? fact : i.amount;
+          if (fact > 0 && i.amount > 0) held = held * fact / i.amount;
+          return Object.assign({}, i, { amount, planned: i.amount, eff, auto, received: ov === undefined ? auto : ov, held, net: Math.max(0, amount - held) });
         });
     }
 
@@ -2236,8 +2241,8 @@
           '<div class="hero">' +
             '<div class="hero-left">' +
               '<div class="hero-num' + (c.available < -0.5 ? " neg" : "") + '">' + fmt(c.available).replace(" ₽", "") + '<span style="font-size:22px;font-weight:700;opacity:.7"> ₽</span></div>' +
-              '<div class="hero-label">' + (c.available < -0.5 ? "перерасход" : "можно сегодня") + ' · ' + WEEKDAYS[dt.getDay()] + ", " + n.d + " " + MONTHS_GEN[n.m] +
-                "<br>норма " + fmt(c.norm) + " · день " + c.t + " из " + c.D + "</div>" +
+              '<div class="hero-label">' + (c.available < -0.5 ? "перерасход за сегодня" : "можно сегодня") + ' · ' + WEEKDAYS[dt.getDay()] + ", " + n.d + " " + MONTHS_GEN[n.m] +
+                "<br>норма " + fmt(c.norm) + " · на руках " + fmt(c.cashNow) + "</div>" +
             "</div>" +
             '<div class="ring" aria-label="Использовано ' + usedPct + '% дневного лимита">' +
               '<svg viewBox="0 0 84 84">' +
@@ -2414,7 +2419,7 @@
         return '<div class="item' + (a ? "" : " dim") + '">' +
           '<div class="item-info"><div class="item-name">' + esc(inc.name) + '</div>' +
           '<div class="item-meta">' + status + (inc.passive ? '<span class="badge green">пассивный</span>' : "") + '<span>' + inc.day + "-е · " + (inc.monthly ? "каждый месяц" : "разовый") + (holdNote ? " · " + holdNote : "") + '</span></div></div>' +
-          '<div class="item-amount green">' + fmt(inc.amount) + '</div>' +
+          '<div class="item-amount green">' + fmt(a ? a.amount : inc.amount) + (a && Math.abs(a.amount - inc.amount) > 0.5 ? '<div style="font-size:11px;font-weight:500;color:var(--muted)">ждали ' + fmt(inc.amount) + "</div>" : "") + '</div>' +
           '<div class="item-actions">' +
             '<button class="btn small secondary" data-action="edit-income" data-id="' + inc.id + '">✎</button>' +
             '<button class="btn small danger" data-action="del-income" data-id="' + inc.id + '">×</button>' +
@@ -3426,27 +3431,63 @@
           const best = unpaid.map(b => ({ b, d: Math.abs(b.amount - x.amount) / b.amount })).sort((a, c) => a.d - c.d)[0];
           if (best && best.d <= 0.3) pre = "bill:" + best.b.id;
         }
-        const notes = { income: "поступление — не трата", transfer: "перевод между своими счетами", refund: "возврат денег", account: "начисление к оплате, а не списание" };
+        if (x.kind === "spend" && cat === "home" && pre.startsWith("cat:") && x.amount >= 1000) pre = "newbill";
+        // Поступление: ищем ожидаемый доход этого месяца (по названию или похожей сумме)
+        const waiting = x.kind === "income" ? incomesFor(y, m - 1).filter(ii => !ii.received) : [];
+        if (x.kind === "income") {
+          const lowN = x.name.toLowerCase();
+          const byName = waiting.find(ii => lowN.includes(ii.name.toLowerCase().slice(0, 5)));
+          // Перевод от человека («Александр Марсович В.», СБП) — скорее аренда/подработка, чем зарплата
+          const person = /^[А-ЯЁ][а-яё]+(\s[А-ЯЁ][а-яё]+)?\s[А-ЯЁ]\.?$/.test(x.name.trim()) || /перевод|сбп/i.test(x.bankCat);
+          const byAmt = waiting.map(ii => ({ ii, d: Math.abs(ii.planned - x.amount) / ii.planned + (person && !ii.passive ? 0.3 : 0) })).sort((a, c) => a.d - c.d)[0];
+          const hit = byName || (byAmt && byAmt.d <= 0.35 ? byAmt.ii : null);
+          pre = hit ? "inc:" + hit.id : "newinc";
+        }
+        const notes = { income: "поступление", transfer: "перевод между своими счетами", refund: "возврат денег", account: "начисление к оплате, а не списание" };
         const note = dup ? "уже внесено" : notes[x.kind] || x.bankCat;
-        const on = x.kind === "spend" && !dup;
-        const opts = '<optgroup label="Трата">' + CAT_IDS.map(id => '<option value="cat:' + id + '"' + (pre === "cat:" + id ? " selected" : "") + ">" + CATEGORIES[id].name + "</option>").join("") + "</optgroup>" +
-          (unpaid.length ? '<optgroup label="Оплата платежа">' + unpaid.map(b => '<option value="bill:' + b.id + '"' + (pre === "bill:" + b.id ? " selected" : "") + ">Оплата: " + esc(b.name) + "</option>").join("") + "</optgroup>" : "");
+        const on = (x.kind === "spend" || (x.kind === "income" && pre.startsWith("inc:"))) && !dup;
+        const incOpts = x.kind === "income" || x.kind === "refund"
+          ? '<optgroup label="Доход">' + waiting.map(ii => '<option value="inc:' + ii.id + '"' + (pre === "inc:" + ii.id ? " selected" : "") + ">Пришло: " + esc(ii.name) + " (ждали " + fmt(ii.planned) + ")</option>").join("") +
+            '<option value="newinc"' + (pre === "newinc" ? " selected" : "") + ">Новый разовый доход</option></optgroup>" : "";
+        const opts = incOpts + '<optgroup label="Трата">' + CAT_IDS.map(id => '<option value="cat:' + id + '"' + (pre === "cat:" + id ? " selected" : "") + ">" + CATEGORIES[id].name + "</option>").join("") + "</optgroup>" +
+          '<optgroup label="Платёж">' + unpaid.map(b => '<option value="bill:' + b.id + '"' + (pre === "bill:" + b.id ? " selected" : "") + ">Оплата: " + esc(b.name) + "</option>").join("") +
+            '<option value="newbill"' + (pre === "newbill" ? " selected" : "") + ">Новый платёж каждый месяц (ЖКХ, связь)</option></optgroup>";
         return '<div class="imp-row' + (on ? "" : " off") + '"><input type="checkbox" class="imp-chk" data-i="' + i + '"' + (on ? " checked" : "") + ' aria-label="Записать" />' +
           '<div class="imp-main"><div class="imp-top"><span class="imp-name">' + esc(x.name) + '</span><span class="imp-amt' + (x.sign === "+" ? " in" : "") + '">' + (x.sign === "+" ? "+" : "−") + x.amount.toLocaleString("ru-RU", { minimumFractionDigits: x.amount % 1 ? 2 : 0, maximumFractionDigits: 2 }) + " ₽</span></div>" +
           '<div class="imp-meta">' + Number(x.date.slice(8)) + " " + MONTHS_GEN[m - 1] + (note ? " · " + esc(note) : "") + "</div>" +
           '<select class="imp-sel" data-i="' + i + '">' + opts + "</select></div></div>";
       }).join("");
       openModal("Нашёл " + items.length + " " + plural(items.length, "операцию", "операции", "операций"),
-        '<p class="hint" style="margin-top:0">Отметьте, что записать. Переводы между своими счетами, поступления и уже внесённое я не отметил. Проверьте суммы — распознавание иногда ошибается.</p>' + rows,
+        '<p class="hint" style="margin-top:0">Отметьте, что записать. Переводы между своими счетами и уже внесённое я не отметил. Коммуналку лучше записывать платежом — тогда она не съедает дневную норму. Проверьте суммы — распознавание иногда ошибается.</p>' + rows,
         "import", { items }, { saveLabel: "Записать" });
     }
 
     function saveImport(ctx) {
-      let nS = 0, nB = 0, sumS = 0;
+      let nS = 0, nB = 0, nI = 0, sumS = 0;
       document.querySelectorAll("#modalBody .imp-chk").forEach(ch => {
         if (!ch.checked) return;
         const i = Number(ch.dataset.i), x = ctx.items[i], v = (document.querySelector('#modalBody .imp-sel[data-i="' + i + '"]') || {}).value || "cat:other";
         if (!x || x.date > todayKey()) return;
+        const mk = x.date.slice(0, 7), dd = Number(x.date.slice(8));
+        if (v.startsWith("inc:")) {
+          const iid = v.slice(4), k = mk + ":" + iid, inc = state.incomes.find(ii => ii.id === iid);
+          if (!inc) return;
+          const prevAmt = state.recvAmt[k] || 0, autoNow = incomesFor(Number(mk.slice(0, 4)), Number(mk.slice(5)) - 1).find(ii => ii.id === iid);
+          const tot = prevAmt + x.amount;
+          if (autoNow && autoNow.auto) delete state.received[k]; else state.received[k] = true;
+          if (Math.abs(tot - inc.amount) > 0.5) state.recvAmt[k] = tot; else delete state.recvAmt[k];
+          nI++; return;
+        }
+        if (v === "newinc") {
+          state.incomes.push({ id: uid(), name: x.name, amount: x.amount, day: dd, note: "со скриншота", monthly: false, withhold: 0, passive: false, from: mk, month: mk });
+          nI++; return;
+        }
+        if (v === "newbill") {
+          const bill = { id: uid(), name: x.name, amount: x.amount, day: dd, cat: "home", note: "со скриншота", from: mk, left: null, leftTs: 0 };
+          state.bills.push(bill);
+          state.billPaid[mk + ":" + bill.id] = { date: x.date, amount: x.amount, ts: Date.now() };
+          nB++; return;
+        }
         if (v.startsWith("bill:")) {
           const k = x.date.slice(0, 7) + ":" + v.slice(5), prev = state.billPaid[k];
           state.billPaid[k] = { date: x.date, amount: (prev ? prev.amount : 0) + x.amount, ts: Date.now() };
@@ -3456,8 +3497,8 @@
           nS++; sumS += x.amount;
         }
       });
-      if (!nS && !nB) { toast("Ничего не отмечено"); return false; }
-      toast((nS ? "Записано трат: " + nS + " на " + fmt(sumS) : "") + (nS && nB ? " · " : "") + (nB ? "отмечено платежей: " + nB : ""));
+      if (!nS && !nB && !nI) { toast("Ничего не отмечено"); return false; }
+      toast([nS ? "трат: " + nS + " на " + fmt(sumS) : "", nB ? "платежей: " + nB : "", nI ? "доходов: " + nI : ""].filter(Boolean).join(" · ").replace(/^./, ch => ch.toUpperCase()));
       return true;
     }
 
@@ -3867,7 +3908,8 @@
         '<div class="form-row"><input id="m-amount" type="number" inputmode="decimal" placeholder="Сумма" value="' + (s.amount || "") + '" /></div>' +
         '<div class="form-row"><div class="field-label">Категория</div><select id="m-cat">' + catOptions(manualCat, s.name) + '</select></div>' +
         '<div class="form-row"><div class="field-label">День</div><select id="m-day">' + dayOptions(y, m, sel) + '</select></div>' +
-        (spend ? "" : '<button type="button" class="linkbtn" style="color:var(--blue-text);margin-top:4px" data-action="scan">📷 Записать со скриншота банка</button>'),
+        (spend ? '<button type="button" class="linkbtn" style="color:var(--blue-text);margin-top:4px;text-align:left" data-action="spend-to-bill" data-key="' + key + '" data-id="' + spend.id + '">Это ежемесячный платёж (коммуналка, связь) → перенести в «Платежи»</button>'
+          : '<button type="button" class="linkbtn" style="color:var(--blue-text);margin-top:4px" data-action="scan">📷 Записать со скриншота банка</button>'),
         "spend", { y, m, key: key || null, id: spend ? spend.id : null });
     }
 
@@ -4002,6 +4044,13 @@
         }
       }
       else if (mode === "import") { if (!saveImport(ctx)) return; }
+      else if (mode === "increcv") {
+        const v = num($("m-amount").value);
+        if (!(v > 0)) return toast("Укажите сумму");
+        if (ctx.auto) delete state.received[ctx.key]; else state.received[ctx.key] = true;
+        if (Math.abs(v - ctx.planned) > 0.5) state.recvAmt[ctx.key] = v; else delete state.recvAmt[ctx.key];
+        toast("Доход отмечен: +" + fmt(v));
+      }
       save(); closeModal(); render();
     }
 
@@ -4176,10 +4225,17 @@
       else if (a === "toggle-income") {
         const key = monthKey(view.y, view.m) + ":" + id;
         const inc = incomesFor(view.y, view.m).find(x => x.id === id);
-        if (inc) {
-          const next = !inc.received;
-          if (next === inc.auto) delete state.received[key]; else state.received[key] = next;
+        if (!inc) return;
+        if (inc.received) {
+          if (inc.auto) state.received[key] = false; else delete state.received[key];
+          delete state.recvAmt[key];
           save(); render();
+          toast("Отметка «пришло» снята");
+        } else {
+          openModal("Доход пришёл: " + inc.name,
+            '<div class="form-row"><div class="field-label">Сколько пришло, ₽</div><input id="m-amount" type="number" inputmode="decimal" value="' + Math.round(inc.planned * 100) / 100 + '" /></div>' +
+            '<p class="hint">Ждали ' + fmt(inc.planned) + ". Если пришло другое — впишите фактическую сумму, она будет только в этом месяце.</p>",
+            "increcv", { key, planned: inc.planned, auto: inc.auto }, { saveLabel: "Пришло" });
         }
       } else if (a === "del-debt") removeWithUndo("debts", id, "Долг");
       else if (a === "del-bill") removeWithUndo("bills", id, "Платёж");
@@ -4216,6 +4272,21 @@
         const v = Math.min(90, Math.max(0, Number(t.dataset.v) || 0));
         setPayPct(v); save(); render();
         toast(v ? "С каждого дохода — " + v + "% в копилку" : "Откладывание выключено");
+      }
+      else if (a === "spend-to-bill") {
+        const k = t.dataset.key, list = state.spends[k] || [], sp = list.find(x => x.id === id);
+        if (!sp) return;
+        const mk = k.slice(0, 7), day = Number(k.slice(8));
+        const bill = { id: uid(), name: sp.name, amount: sp.amount, day, cat: sp.cat === "other" ? "home" : sp.cat, note: "", from: mk, left: null, leftTs: 0 };
+        state.bills.push(bill);
+        state.billPaid[mk + ":" + bill.id] = { date: k, amount: sp.amount, ts: Date.now() };
+        state.spends[k] = list.filter(x => x.id !== id);
+        if (!state.spends[k].length) delete state.spends[k];
+        save(); closeModal(); render();
+        toast("«" + sp.name + "» теперь платёж " + day + "-го числа, этот месяц отмечен оплаченным", "Отменить", () => {
+          state.bills = state.bills.filter(b => b.id !== bill.id); delete state.billPaid[mk + ":" + bill.id];
+          (state.spends[k] = state.spends[k] || []).push(sp); save(); render();
+        });
       }
       else if (a === "scan") { const f = $("scanFile"); f.value = ""; f.click(); }
       else if (a === "calc-fill") { calcSt.amt = t.dataset.v; const f = $("calcAmt"); if (f) f.value = calcSt.amt; renderCalcOut(); }
