@@ -859,6 +859,23 @@
     .hbar-head .n { display: inline-flex; align-items: center; gap: 10px; }
     .hbar-head .ico.ico-sm { width: 28px; height: 28px; }
     [data-theme="light"] .ico img { box-shadow: 0 6px 14px -6px rgba(15,23,42,.45); }
+
+    /* скриншот банка */
+    .ocr-box { text-align: center; padding: 8px 0; }
+    .ocr-spin { width: 34px; height: 34px; margin: 4px auto 12px; border-radius: 50%; border: 3px solid var(--track); border-top-color: var(--blue); animation: spin .9s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .imp-row { display: flex; gap: 12px; align-items: flex-start; padding: 12px 0; border-bottom: 1px solid var(--border-subtle); transition: opacity .2s; }
+    .imp-row:last-child { border-bottom: none; }
+    .imp-row.off { opacity: .5; }
+    .imp-row.off .imp-sel { display: none; }
+    .imp-row input.imp-chk { width: 22px; height: 22px; flex: 0 0 22px; margin: 2px 0 0; padding: 0; accent-color: var(--blue); }
+    .imp-main { flex: 1; min-width: 0; }
+    .imp-top { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
+    .imp-name { font-size: 15px; font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .imp-amt { font-size: 15px; font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums; }
+    .imp-amt.in { color: var(--green); }
+    .imp-meta { font-size: 12px; color: var(--muted); margin-top: 2px; }
+    select.imp-sel { margin-top: 8px; padding: 8px 12px; font-size: 14px; }
   </style>
 </head>
 <body>
@@ -881,7 +898,7 @@
       <div class="card" id="quickCard">
         <div class="section-head" style="margin-bottom:10px">
           <h2 style="font-size:15px;font-weight:600">Траты сегодня</h2>
-          <button class="btn small secondary" id="btnAddSpend">другая дата…</button>
+          <span style="display:flex;gap:6px"><button class="btn small secondary" data-action="scan">📷 Скриншот банка</button><button class="btn small secondary" id="btnAddSpend">другая дата…</button></span>
         </div>
         <div class="quick">
           <input type="text" id="qSmart" placeholder="такси 450 или обед 320" autocomplete="off" aria-label="Умный ввод траты" />
@@ -890,6 +907,7 @@
         <p class="smart-hint">Можно писать «такси 450», «2к продукты», «обед 1 200». Категория определится сама.</p>
         <div class="qchips" id="quickChips"></div>
         <datalist id="spendNames"></datalist>
+        <input type="file" id="scanFile" accept="image/*" multiple hidden />
         <div id="todaySpends" style="margin-top:12px"></div>
       </div>
       <div id="sumBottom"></div>
@@ -3256,6 +3274,193 @@
     }
     const catIco = (cat, cls) => ico("c-" + (CATEGORIES[cat] ? cat : "other"), cls || "ico-sm");
 
+    // ===== Разбор текста со скриншота банка =====
+    // На входе — текст, прочитанный построчно (строка = «Название −288,42 ₽»), на выходе — список операций.
+    const BANK_MONTHS = ["январ", "феврал", "март", "апрел", "ма", "июн", "июл", "август", "сентябр", "октябр", "ноябр", "декабр"];
+    function parseBankText(text, today) {
+      const t0 = new Date(today.y, today.m, today.d);
+      const key = d => d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+      let cur = key(t0);
+      const AMT = /([+\-−—–]\s?)?(\d{1,3}(?:[  ]\d{3})+|\d+)(?:[.,](\d{1,3}))?\s*(₽|Р|P|р|руб\.?)?\s*$/;
+      const NOT_AMT = /(сч[её]т|карт[аы])\s*[-·•.*:]{1,3}\s*\d|лицевой|\*\d{4}/i;
+      // Чистим мусор от иконок в начале строки: «# Услуги», «4 Александр», «(op Переводы», «MW Электро…»
+      const clean = s => {
+        let x = s.replace(/^[^A-Za-zА-Яа-яЁё0-9]+/, "").trim(), tk = x.split(" ");
+        while (tk.length > 1 && tk[0].length <= 2 && !/^[А-ЯЁA-Z][а-яёa-z]/.test(tk[0])) { tk.shift(); tk[0] = tk[0].replace(/^[^A-Za-zА-Яа-яЁё0-9]+/, ""); }
+        x = tk.join(" ").trim();
+        return /[A-Za-zА-Яа-яЁё]{2}/.test(x) ? x : "";
+      };
+      const lines = String(text || "").split(/\r?\n/).map(l => l.replace(/\s+/g, " ").trim()).filter(Boolean);
+      const out = [];
+      let prevText = "";
+      for (let i = 0; i < lines.length; i++) {
+        const l = lines[i], low = l.toLowerCase();
+        // Заголовки дней: «Сегодня», «Вчера», «16 ноября, пн», «3 октября 2026»
+        if (/^сегодня(?![а-яё])/.test(low)) { cur = key(t0); prevText = ""; continue; }
+        if (/^вчера(?![а-яё])/.test(low)) { cur = key(new Date(today.y, today.m, today.d - 1)); prevText = ""; continue; }
+        if (/^позавчера(?![а-яё])/.test(low)) { cur = key(new Date(today.y, today.m, today.d - 2)); prevText = ""; continue; }
+        const dm = low.match(/^(\d{1,2})\s+(январ|феврал|март|апрел|ма[яй]|июн|июл|август|сентябр|октябр|ноябр|декабр)[а-я]*\.?,?(?:\s+(\d{4}))?/);
+        if (dm) {
+          const mi = BANK_MONTHS.findIndex(p => dm[2].startsWith(p));
+          let y = dm[3] ? Number(dm[3]) : today.y;
+          if (!dm[3] && mi > today.m) y--;
+          cur = key(new Date(y, mi, Number(dm[1])));
+          prevText = "";
+          continue;
+        }
+        const am = l.match(AMT);
+        // Сумма — только с ₽ или копейками; «Счёт ··7054» суммой не считаем
+        if (!am || NOT_AMT.test(l) || (!am[4] && am[3] === undefined)) { prevText = l; continue; }
+        let dec = am[3] || "";
+        if (dec.length === 3) dec = dec.slice(0, 2); // «4 096,382» — третья цифра это прочитанный «₽»
+        const amount = Number(am[2].replace(/[  ]/g, "") + (dec ? "." + dec : ""));
+        if (!(amount > 0) || amount > 10000000) { prevText = l; continue; }
+        const sign = am[1] ? (am[1].trim() === "+" ? "+" : "-") : "";
+        let name = clean(l.slice(0, am.index));
+        if (!name && prevText) name = clean(prevText);
+        // Следующая строка — категория банка: «Услуги ЖКХ Счёт ··7054»
+        const nx = lines[i + 1] || "", nxIsAmt = AMT.test(nx) && !NOT_AMT.test(nx) && /₽|Р|P|[.,]\d{1,2}\s*$/.test(nx);
+        const bankCat = nxIsAmt ? "" : clean(nx.split(/сч[её]т|лицевой|карта/i)[0] || "");
+        const whole = (name + " " + bankCat + " " + nx).toLowerCase();
+        let kind = sign === "+" ? "income" : "spend";
+        if (/между (своими )?сч[её]тами|между своими/.test(whole)) kind = "transfer";
+        else if (/возврат/.test(whole)) kind = "refund";
+        else if (/лицевой сч[её]т/.test(nx.toLowerCase())) kind = "account";
+        out.push({ date: cur, name: name || "Трата", amount, sign, bankCat, kind });
+        prevText = "";
+        if (!nxIsAmt) i++; // строку категории уже разобрали
+      }
+      return out.filter(x => x.date <= key(t0));
+    }
+
+    // Категория банка → наша категория (ваш ручной выбор для этого названия важнее)
+    function bankCatToCat(bc, name) {
+      const lk = String(name || "").trim().toLowerCase();
+      if (state.catMap[lk]) return state.catMap[lk];
+      const b = String(bc || "").toLowerCase();
+      if (/жкх|жку|коммунал|квартплат|связь|интернет|мобильн/.test(b)) return "home";
+      if (/кафе|ресторан|фастфуд|фаст-фуд|доставка еды/.test(b)) return "cafe";
+      if (/продукт|супермаркет/.test(b)) return "food";
+      if (/транспорт|такси|азс|топлив|автомоб/.test(b)) return "transport";
+      if (/аптек|медицин|здоров/.test(b)) return "health";
+      if (/маркетплейс|одежд|обув|электрон|техник|покупк/.test(b)) return "shop";
+      if (/развлеч|кино|игр|подписк/.test(b)) return "fun";
+      return detectCategory(name);
+    }
+
+    // Распознавание текста на телефоне (Tesseract.js). Грузится только при первом скриншоте.
+    let tessP = null, ocrWorker = null, ocrProg = null;
+    function loadTess() {
+      if (window.Tesseract) return Promise.resolve();
+      if (!tessP) tessP = new Promise((res, rej) => {
+        const sc = document.createElement("script");
+        sc.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
+        sc.onload = res; sc.onerror = () => { tessP = null; rej(new Error("net")); };
+        document.head.appendChild(sc);
+      });
+      return tessP;
+    }
+    async function ocrImage(file) {
+      await loadTess();
+      const url = URL.createObjectURL(file);
+      const img = await new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = rej; im.src = url; });
+      const k = img.naturalWidth < 900 ? 2 : 1, cv = document.createElement("canvas");
+      cv.width = img.naturalWidth * k; cv.height = img.naturalHeight * k;
+      const g = cv.getContext("2d");
+      g.drawImage(img, 0, 0, cv.width, cv.height);
+      URL.revokeObjectURL(url);
+      // Серый + светлый фон: тёмную тему банка переворачиваем, так текст читается точнее
+      const d = g.getImageData(0, 0, cv.width, cv.height), px = d.data;
+      let tot = 0;
+      for (let i = 0; i < px.length; i += 4) { const l = 0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2]; px[i] = px[i + 1] = px[i + 2] = l; tot += l; }
+      if (tot / (px.length / 4) < 128) for (let i = 0; i < px.length; i += 4) { px[i] = px[i + 1] = px[i + 2] = 255 - px[i]; }
+      g.putImageData(d, 0, 0);
+      if (!ocrWorker) ocrWorker = await window.Tesseract.createWorker("rus+eng", 1, { logger: m => ocrProg && ocrProg(m) });
+      await ocrWorker.setParameters({ tessedit_pageseg_mode: "6", preserve_interword_spaces: "0" });
+      const r = await ocrWorker.recognize(cv);
+      return r.data.text || "";
+    }
+    async function scanFiles(files) {
+      files = Array.from(files || []).filter(f => /^image\//.test(f.type) || /\.(png|jpe?g|heic|webp)$/i.test(f.name));
+      if (!files.length) return;
+      openModal("Читаю скриншот", '<div class="ocr-box"><div class="ocr-spin"></div><div id="ocrStep">Готовлю распознавание…</div>' +
+        '<div class="prog-bar" style="margin-top:12px"><div class="fill" id="ocrBar" style="width:3%"></div></div>' +
+        '<p class="hint" style="margin-top:12px">Первый раз скачивается словарь русского языка (около 15 МБ) — это одноразово. Скриншот никуда не отправляется, читается прямо на телефоне.</p></div>', "ocr", {}, { hideSave: true });
+      const step = (txt, p) => { const a = $("ocrStep"), b = $("ocrBar"); if (a) a.textContent = txt; if (b && p !== undefined) b.style.width = Math.max(3, Math.round(p * 100)) + "%"; };
+      let n = 0, all = [];
+      ocrProg = m => {
+        const names = { "loading tesseract core": "Загружаю распознавание…", "loading language traineddata": "Скачиваю словарь…", "initializing api": "Запускаю…", "recognizing text": "Читаю скриншот " + (n + 1) + " из " + files.length + "…" };
+        if (names[m.status]) step(names[m.status], m.status === "recognizing text" ? (n + (m.progress || 0)) / files.length : m.progress);
+      };
+      try {
+        for (; n < files.length; n++) {
+          const text = await ocrImage(files[n]);
+          all = all.concat(parseBankText(text, now()));
+        }
+      } catch (e) {
+        if (modal.mode !== "ocr") return;
+        $("modalBody").innerHTML = '<div class="alert warn">' + (String(e && e.message) === "net" ? "Не получилось загрузить распознавание — нужен интернет (только в первый раз)." : "Не получилось прочитать скриншот. Попробуйте ещё раз или другой скриншот.") + "</div>";
+        return;
+      }
+      if (modal.mode !== "ocr") return; // окно закрыли, пока читали
+      // Скриншоты могут пересекаться — одинаковые операции оставляем один раз
+      const seen = {};
+      all = all.filter(x => { const k = x.date + "|" + x.amount + "|" + x.name.toLowerCase(); if (seen[k]) return false; seen[k] = 1; return true; });
+      if (!all.length) {
+        $("modalBody").innerHTML = '<div class="alert warn">Не нашёл операций на скриншоте.</div><p class="hint">Нужен скриншот <b>истории операций</b> банка, где видны названия, суммы и даты. Лучше без тёмных пятен и обрезанных строк.</p>';
+        return;
+      }
+      showImport(all);
+    }
+
+    function showImport(items) {
+      const rows = items.map((x, i) => {
+        const [y, m] = x.date.split("-").map(Number), mk = x.date.slice(0, 7);
+        const dup = (state.spends[x.date] || []).some(sp => Math.abs(sp.amount - x.amount) < 0.01) ||
+          state.bills.some(b => { const pd = state.billPaid[mk + ":" + b.id]; return pd && Math.abs(pd.amount - x.amount) < 0.01; });
+        const cat = bankCatToCat(x.bankCat, x.name);
+        // Похоже на «Платёж» (квартплата, связь) — предлагаем отметить его, а не писать трату
+        const unpaid = billsFor(y, m - 1).filter(b => !b.paid);
+        let pre = "cat:" + cat;
+        if (x.kind === "spend" && cat === "home" && unpaid.length) {
+          const best = unpaid.map(b => ({ b, d: Math.abs(b.amount - x.amount) / b.amount })).sort((a, c) => a.d - c.d)[0];
+          if (best && best.d <= 0.3) pre = "bill:" + best.b.id;
+        }
+        const notes = { income: "поступление — не трата", transfer: "перевод между своими счетами", refund: "возврат денег", account: "начисление к оплате, а не списание" };
+        const note = dup ? "уже внесено" : notes[x.kind] || x.bankCat;
+        const on = x.kind === "spend" && !dup;
+        const opts = '<optgroup label="Трата">' + CAT_IDS.map(id => '<option value="cat:' + id + '"' + (pre === "cat:" + id ? " selected" : "") + ">" + CATEGORIES[id].name + "</option>").join("") + "</optgroup>" +
+          (unpaid.length ? '<optgroup label="Оплата платежа">' + unpaid.map(b => '<option value="bill:' + b.id + '"' + (pre === "bill:" + b.id ? " selected" : "") + ">Оплата: " + esc(b.name) + "</option>").join("") + "</optgroup>" : "");
+        return '<div class="imp-row' + (on ? "" : " off") + '"><input type="checkbox" class="imp-chk" data-i="' + i + '"' + (on ? " checked" : "") + ' aria-label="Записать" />' +
+          '<div class="imp-main"><div class="imp-top"><span class="imp-name">' + esc(x.name) + '</span><span class="imp-amt' + (x.sign === "+" ? " in" : "") + '">' + (x.sign === "+" ? "+" : "−") + x.amount.toLocaleString("ru-RU", { minimumFractionDigits: x.amount % 1 ? 2 : 0, maximumFractionDigits: 2 }) + " ₽</span></div>" +
+          '<div class="imp-meta">' + Number(x.date.slice(8)) + " " + MONTHS_GEN[m - 1] + (note ? " · " + esc(note) : "") + "</div>" +
+          '<select class="imp-sel" data-i="' + i + '">' + opts + "</select></div></div>";
+      }).join("");
+      openModal("Нашёл " + items.length + " " + plural(items.length, "операцию", "операции", "операций"),
+        '<p class="hint" style="margin-top:0">Отметьте, что записать. Переводы между своими счетами, поступления и уже внесённое я не отметил. Проверьте суммы — распознавание иногда ошибается.</p>' + rows,
+        "import", { items }, { saveLabel: "Записать" });
+    }
+
+    function saveImport(ctx) {
+      let nS = 0, nB = 0, sumS = 0;
+      document.querySelectorAll("#modalBody .imp-chk").forEach(ch => {
+        if (!ch.checked) return;
+        const i = Number(ch.dataset.i), x = ctx.items[i], v = (document.querySelector('#modalBody .imp-sel[data-i="' + i + '"]') || {}).value || "cat:other";
+        if (!x || x.date > todayKey()) return;
+        if (v.startsWith("bill:")) {
+          const k = x.date.slice(0, 7) + ":" + v.slice(5), prev = state.billPaid[k];
+          state.billPaid[k] = { date: x.date, amount: (prev ? prev.amount : 0) + x.amount, ts: Date.now() };
+          nB++;
+        } else {
+          addSpend(x.date, x.name, x.amount, v.slice(4));
+          nS++; sumS += x.amount;
+        }
+      });
+      if (!nS && !nB) { toast("Ничего не отмечено"); return false; }
+      toast((nS ? "Записано трат: " + nS + " на " + fmt(sumS) : "") + (nS && nB ? " · " : "") + (nB ? "отмечено платежей: " + nB : ""));
+      return true;
+    }
+
     // ===== Оформление =====
     function hexRgb(h) { return [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16)); }
     function mixHex(a, b, t) {
@@ -3661,7 +3866,8 @@
         '<div class="form-row"><input id="m-name" list="spendNames" placeholder="На что" value="' + esc(s.name) + '" /></div>' +
         '<div class="form-row"><input id="m-amount" type="number" inputmode="decimal" placeholder="Сумма" value="' + (s.amount || "") + '" /></div>' +
         '<div class="form-row"><div class="field-label">Категория</div><select id="m-cat">' + catOptions(manualCat, s.name) + '</select></div>' +
-        '<div class="form-row"><div class="field-label">День</div><select id="m-day">' + dayOptions(y, m, sel) + '</select></div>',
+        '<div class="form-row"><div class="field-label">День</div><select id="m-day">' + dayOptions(y, m, sel) + '</select></div>' +
+        (spend ? "" : '<button type="button" class="linkbtn" style="color:var(--blue-text);margin-top:4px" data-action="scan">📷 Записать со скриншота банка</button>'),
         "spend", { y, m, key: key || null, id: spend ? spend.id : null });
     }
 
@@ -3795,6 +4001,7 @@
           state.assets.push({ id: uid(), name, kind: "asset", value, monthly: 0, note });
         }
       }
+      else if (mode === "import") { if (!saveImport(ctx)) return; }
       save(); closeModal(); render();
     }
 
@@ -3888,6 +4095,9 @@
     })();
 
     // В окне траты подсказываем, какая категория определится сама
+    document.addEventListener("change", e => {
+      if (e.target.classList && e.target.classList.contains("imp-chk")) e.target.closest(".imp-row").classList.toggle("off", !e.target.checked);
+    });
     document.addEventListener("input", e => {
       if (e.target.id === "calcAmt") { calcSt.amt = e.target.value; renderCalcOut(); return; }
       if (e.target.id === "m-name" && modal.mode === "spend" && $("m-cat")) {
@@ -3896,6 +4106,7 @@
       }
     });
     $("btnAddSpend").addEventListener("click", () => showSpend());
+    $("scanFile").addEventListener("change", e => scanFiles(e.target.files));
     $("qAdd").addEventListener("click", quickAdd);
     $("qSmart").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); quickAdd(); } });
 
@@ -4006,6 +4217,7 @@
         setPayPct(v); save(); render();
         toast(v ? "С каждого дохода — " + v + "% в копилку" : "Откладывание выключено");
       }
+      else if (a === "scan") { const f = $("scanFile"); f.value = ""; f.click(); }
       else if (a === "calc-fill") { calcSt.amt = t.dataset.v; const f = $("calcAmt"); if (f) f.value = calcSt.amt; renderCalcOut(); }
       else if (a === "calc-pct") { calcSt.pct = Number(t.dataset.v) || 10; renderStash(); }
       else if (a === "calc-put") {
